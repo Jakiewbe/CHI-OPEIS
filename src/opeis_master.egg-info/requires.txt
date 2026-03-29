@@ -1,0 +1,9 @@
+PyQt6<7,>=6.8
+pydantic<3,>=2.8
+
+[build]
+pyinstaller<7,>=6.11
+
+[dev]
+pytest<9,>=8.3
+pytest-qt<5,>=4.4

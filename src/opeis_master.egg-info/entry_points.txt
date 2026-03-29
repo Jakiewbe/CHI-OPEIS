@@ -1,0 +1,3 @@
+[console_scripts]
+chi-generator = chi_generator.main:main
+opeis-master = opeis_master.main:main

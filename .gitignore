@@ -1,0 +1,14 @@
+.venv/
+build/
+dist/
+.pytest_cache/
+.pytest-artifacts/
+.chi-generator/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+*.tmp
+*.chi-preset
+tmp-*.json

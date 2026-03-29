@@ -1,0 +1,84 @@
+QMainWindow {
+    background: #f3f5f7;
+    color: #1d2329;
+    font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+    font-size: 10pt;
+}
+
+QWidget {
+    font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+}
+
+QFrame[card="true"] {
+    background: #ffffff;
+    border: 1px solid #d9e0e7;
+    border-radius: 12px;
+}
+
+QLabel#cardTitle {
+    font-size: 12pt;
+    font-weight: 700;
+    color: #17324d;
+}
+
+QLabel#panelLabel {
+    font-weight: 600;
+    color: #17324d;
+}
+
+QLabel#summaryLabel {
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: #eef4fb;
+    color: #17324d;
+}
+
+QPlainTextEdit {
+    border: 1px solid #cad4de;
+    border-radius: 8px;
+    background: #fcfdfe;
+    padding: 8px;
+    selection-background-color: #2e6bb2;
+}
+
+QListWidget {
+    border: 1px solid #cad4de;
+    border-radius: 8px;
+    background: #ffffff;
+    padding: 4px;
+}
+
+QPushButton {
+    border: 1px solid #8fa7bd;
+    background: #ffffff;
+    border-radius: 8px;
+    padding: 8px 12px;
+}
+
+QPushButton:hover {
+    background: #eef4fb;
+}
+
+QPushButton:pressed {
+    background: #dce9f7;
+}
+
+QPushButton:disabled {
+    color: #9aa8b7;
+    border-color: #c9d3dd;
+    background: #f4f6f8;
+}
+
+QComboBox, QSpinBox, QDoubleSpinBox, QLineEdit, QCheckBox {
+    border: 1px solid #cad4de;
+    border-radius: 8px;
+    padding: 6px 8px;
+    background: #ffffff;
+}
+
+QTabWidget::pane {
+    border: 1px solid #cad4de;
+    border-radius: 8px;
+    top: -1px;
+}
+

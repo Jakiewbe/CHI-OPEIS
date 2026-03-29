@@ -1,0 +1,99 @@
+Metadata-Version: 2.4
+Name: opeis-master
+Version: 0.1.0
+Summary: Local desktop GUI application generator for CHI in-situ EIS scripts.
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: PyQt6<7,>=6.8
+Requires-Dist: pydantic<3,>=2.8
+Provides-Extra: dev
+Requires-Dist: pytest<9,>=8.3; extra == "dev"
+Requires-Dist: pytest-qt<5,>=4.4; extra == "dev"
+Provides-Extra: build
+Requires-Dist: pyinstaller<7,>=6.11; extra == "build"
+
+# 辰华（CHI）原位阻抗脚本生成器
+
+这是一个本地 PyQt6 桌面应用，用来把原位阻抗实验参数转换成可直接复制到 CHI Macro Command 的纯文本脚本。
+
+当前版本重点支持：
+- 左侧参数输入，右侧实时脚本预览与 `Warning / Error`
+- `固定电压点`、`固定时间点`、`分阶段均匀时间点`、`预处理 + 正式测试`、`脉冲放电取点`
+- `IMP / CP / ISTEP / delay`
+- 只保留一种 1C 计算依据：活性物质质量 `mg` + 理论比容量 `mAh/g`
+- 放电电流既可按倍率输入，也可直接输入电流
+- 智能预设会把最终规划出的电压点/时间点规整列出
+- 默认脚本会先测一次 OCV，并补齐通用头尾命令
+- 文件命名自动区分 `CC / EIS / ACT / REL / PULSE`，避免恒流段和阻抗段混淆
+- 重点警告：
+  - EIS 点较多且 `fl = 0.01`
+  - OCV 附近点过密
+  - 多次 IMP 插入导致放电曲线明显间歇化
+
+## 技术栈
+
+- Python 3.11+
+- PyQt6
+- pydantic
+- pytest
+
+## 架构
+
+- `src/chi_generator/` 是主实现
+- `src/opeis_master/` 是兼容层，保留旧入口和旧导入路径
+- GUI 只负责采集输入、展示预览和告警
+- 计算、校验、脚本渲染全部放在 domain 层
+
+## 安装
+
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\python -m pip install -e .[dev]
+```
+
+## 启动
+
+推荐：
+
+```powershell
+.\.venv\Scripts\python -m chi_generator.main
+```
+
+兼容入口：
+
+```powershell
+.\.venv\Scripts\python -m opeis_master.main
+```
+
+安装后也可以直接使用：
+
+```powershell
+.\.venv\Scripts\chi-generator.exe
+```
+
+## 测试
+
+```powershell
+$env:QT_QPA_PLATFORM="offscreen"
+.\.venv\Scripts\pytest -q
+```
+
+## 目录
+
+```text
+src/chi_generator/domain/    领域模型、计算、校验、CHI 脚本渲染
+src/chi_generator/ui/        PyQt6 界面与 GUI -> Domain 适配
+src/chi_generator/app.py     GUI 装配入口
+src/opeis_master/            兼容层与旧入口
+tests/                       GUI、domain、兼容契约测试
+docs/                        架构、配置、使用与测试说明
+```
+
+## 关键规则
+
+- GUI 中的公式只用于本地计算，不会写进最终脚本
+- 最终脚本必须是纯命令、纯数字、可直接复制
+- 默认脚本头部包含 `fileoverride / folder / cellon`，尾部包含 `celloff / end`
+- 默认第一段会先执行一次 OCV 阻抗测量
+- 存在 `Error` 时禁止生成和复制
+- 只有 `Warning` 时允许继续，但会在界面右侧醒目标出
