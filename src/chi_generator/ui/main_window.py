@@ -1,45 +1,28 @@
-"""Main application window for the CHI in-situ EIS generator."""
+﻿"""Main application window for the CHI in-situ EIS generator."""
 
 from __future__ import annotations
 
 from pathlib import Path
-import re
 
-from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtWidgets import (
-    QCheckBox,
-    QComboBox,
-    QFileDialog,
-    QFormLayout,
-    QFrame,
-    QHBoxLayout,
-    QLabel,
-    QLineEdit,
-    QMainWindow,
-    QPushButton,
-    QScrollArea,
-    QSplitter,
-    QVBoxLayout,
-    QWidget,
-)
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtWidgets import QCheckBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QSplitter, QStatusBar, QVBoxLayout, QWidget
+from qfluentwidgets import FluentIcon as FIF, LineEdit, MSFluentWindow, PrimaryPushButton, PushButton, ScrollArea, Theme, setTheme
 
-from chi_generator.domain.models import ScriptBundle, SequenceScriptBundle, Severity, ValidationIssue
+from chi_generator.domain.models import SamplingMode, ScriptBundle, ScriptKind, SequenceScriptBundle, Severity, ValidationIssue
 from chi_generator.ui.adapters import GuiBackend
-from chi_generator.ui.models import CurrentInputUiMode, GuiPhaseState, GuiState, PhaseUiKind, RelaxationUiMode, WorkspaceMode
+from chi_generator.ui.models import CurrentBasisUiMode, CurrentInputUiMode, GuiLoopState, GuiPhaseState, GuiState, PhaseUiKind, RelaxationUiMode, WorkflowItemState, WorkspaceMode, expand_workflow_items
+from chi_generator.ui.preview_chart import ScriptPreviewChart
 from chi_generator.ui.presets import PresetFileService
-from chi_generator.ui.widgets import Card, IssueListWidget, NoWheelComboBox, PresetComboBox, ScriptOutputPanel, WorkstepEditorRow
+from chi_generator.ui.widgets import Card, IssueListWidget, LoopBlockWidget, NoWheelComboBox, PresetComboBox, ScriptOutputPanel, WorkstepEditorRow
 
 
-class MainWindow(QMainWindow):
-    """PyQt6 desktop UI for sequence and pulse script generation."""
+class MainWindow(MSFluentWindow):
+    """Fluent desktop UI for sequence and pulse script generation."""
 
-    def __init__(
-        self,
-        service: object | None = None,
-        parent: QWidget | None = None,
-        preset_service: PresetFileService | None = None,
-    ) -> None:
+    def __init__(self, service: object | None = None, parent: QWidget | None = None, preset_service: PresetFileService | None = None) -> None:
         super().__init__(parent)
+        setTheme(Theme.DARK)
+        self.setMicaEffectEnabled(False)
         self._backend = GuiBackend(service=service)
         self._preset_service = preset_service or PresetFileService()
         self._refresh_timer = QTimer(self)
@@ -50,6 +33,7 @@ class MainWindow(QMainWindow):
         self._last_bundle: ScriptBundle | None = None
         self._current_preset_path: Path | None = None
         self.phase_editors: list[WorkstepEditorRow] = []
+        self.workflow_widgets: list[WorkstepEditorRow | LoopBlockWidget] = []
         self._build_ui()
         self._connect_signals()
         self._apply_defaults()
@@ -57,271 +41,200 @@ class MainWindow(QMainWindow):
         self.refresh_preview()
 
     def _build_ui(self) -> None:
-        self.setWindowTitle("辰华原位阻抗脚本生成终端")
-        self.resize(1560, 940)
-        self.setMinimumSize(1320, 840)
-
-        splitter = QSplitter(Qt.Orientation.Horizontal, self)
-        splitter.setChildrenCollapsible(False)
-        self.setCentralWidget(splitter)
-
+        self.setWindowTitle("CHI 原位EIS脚本生成器")
+        self.resize(1520, 940)
+        self.setMinimumSize(1280, 840)
+        self.workspace_page = QWidget(self)
+        self.workspace_page.setObjectName("workspacePage")
+        page_layout = QVBoxLayout(self.workspace_page)
+        page_layout.setContentsMargins(14, 14, 14, 10)
+        page_layout.setSpacing(10)
+        self.workspace_splitter = QSplitter(Qt.Orientation.Horizontal, self.workspace_page)
+        self.workspace_splitter.setChildrenCollapsible(False)
         self.left_panel = self._build_left_panel()
         self.right_panel = self._build_right_panel()
-        self.right_panel.setMaximumWidth(540)
-        splitter.addWidget(self.left_panel)
-        splitter.addWidget(self.right_panel)
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 0)
-        splitter.setSizes([1120, 420])
-
-        self.statusBar().showMessage("就绪")
+        self.right_panel.setMaximumWidth(560)
+        self.workspace_splitter.addWidget(self.left_panel)
+        self.workspace_splitter.addWidget(self.right_panel)
+        self.workspace_splitter.setStretchFactor(0, 1)
+        self.workspace_splitter.setStretchFactor(1, 0)
+        self.workspace_splitter.setSizes([1080, 420])
+        self._status_bar = QStatusBar(self.workspace_page)
+        self._status_bar.setSizeGripEnabled(False)
+        page_layout.addWidget(self.workspace_splitter, 1)
+        page_layout.addWidget(self._status_bar)
+        self.addSubInterface(self.workspace_page, FIF.APPLICATION, "工作区")
+        self.navigationInterface.setCurrentItem(self.workspace_page.objectName())
         self._apply_styles()
+
+    def statusBar(self) -> QStatusBar:
+        return self._status_bar
 
     def _build_left_panel(self) -> QWidget:
         root = QWidget(self)
+        root.setObjectName("leftPanel")
         layout = QVBoxLayout(root)
         layout.setContentsMargins(0, 0, 0, 0)
-
-        scroll = QScrollArea(root)
+        scroll = ScrollArea(root)
+        scroll.setObjectName("leftScrollArea")
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
-
         body = QWidget(scroll)
+        body.setObjectName("leftScrollBody")
         self.left_layout = QVBoxLayout(body)
-        self.left_layout.setContentsMargins(18, 18, 18, 18)
+        self.left_layout.setContentsMargins(10, 10, 10, 10)
         self.left_layout.setSpacing(14)
-
         self.workspace_card = self._build_workspace_card()
         self.project_card = self._build_project_card()
         self.battery_card = self._build_battery_card()
         self.workstep_card = self._build_workstep_card()
         self.pulse_card = self._build_pulse_card()
         self.impedance_card = self._build_impedance_card()
-        self.sequence_card = self.workstep_card
-
-        for card in (
-            self.workspace_card,
-            self.project_card,
-            self.battery_card,
-            self.workstep_card,
-            self.pulse_card,
-            self.impedance_card,
-        ):
+        for card in (self.workspace_card, self.project_card, self.battery_card, self.workstep_card, self.pulse_card, self.impedance_card):
             self.left_layout.addWidget(card)
         self.left_layout.addStretch(1)
-
         scroll.setWidget(body)
         layout.addWidget(scroll)
         return root
 
     def _build_right_panel(self) -> QWidget:
-        panel = QWidget(self)
+        scroll = ScrollArea(self)
+        scroll.setObjectName("rightScrollArea")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        panel = QWidget(scroll)
+        panel.setObjectName("rightPanel")
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(18, 18, 18, 18)
         layout.setSpacing(14)
-
-        self.status_card = Card("辰华原位阻抗脚本生成终端", panel)
-        hero = QFrame(self.status_card)
-        hero.setProperty("hero", True)
-        hero_layout = QVBoxLayout(hero)
-        hero_layout.setContentsMargins(18, 16, 18, 16)
-        hero_layout.setSpacing(10)
-
-        self.workspace_mode_label = QLabel("辰华原位阻抗脚本生成终端", hero)
-        self.workspace_mode_label.setObjectName("heroKicker")
-        self.workspace_headline = QLabel("交替工步在同一条工作流里完成", hero)
-        self.workspace_headline.setObjectName("heroTitle")
-        self.workspace_copy = QLabel("统一从工步表格编辑，模板只负责快速起手。", hero)
-        self.workspace_copy.setObjectName("heroBody")
-        self.current_basis_label = QLabel("电流基准", hero)
-        self.current_basis_label.setObjectName("metaLabel")
-        self.current_preview_label = QLabel("-", hero)
-        self.current_preview_label.setObjectName("metricText")
-        hero_layout.addWidget(self.workspace_mode_label)
-        hero_layout.addWidget(self.workspace_headline)
-        hero_layout.addWidget(self.workspace_copy)
-        hero_layout.addWidget(self.current_basis_label)
-        hero_layout.addWidget(self.current_preview_label)
-        self.status_card.content_layout.addWidget(hero)
+        self.status_card = Card("总览", panel)
+        self.workspace_mode_label = QLabel("序列模式", self.status_card)
+        self.workspace_headline = QLabel("工步列表在左，脚本与风险预览在右。", self.status_card)
+        self.workspace_copy = QLabel("生成前会突出显示高风险设置、SoC 风险和可能丢失的点位。", self.status_card)
+        self.workspace_copy.setWordWrap(True)
+        self.current_preview_label = QLabel("-", self.status_card)
+        for widget in (self.workspace_mode_label, self.workspace_headline, self.workspace_copy, self.current_preview_label):
+            self.status_card.content_layout.addWidget(widget)
+        self.status_card.setMaximumHeight(170)
         layout.addWidget(self.status_card)
-
-        self.issue_card = Card("Warnings & Errors", panel)
+        self.issue_card = Card("警告与错误", panel)
         self.issue_list = IssueListWidget(self.issue_card)
         self.issue_card.content_layout.addWidget(self.issue_list)
+        self.issue_card.setMaximumHeight(170)
         layout.addWidget(self.issue_card, 1)
-
-        self.preview_card = Card("Script Preview", panel)
+        self.planning_card = Card("采样看板", panel)
+        self.preview_chart = ScriptPreviewChart(self.planning_card)
+        self.planning_card.content_layout.addWidget(self.preview_chart)
+        self.planning_card.setMinimumHeight(300)
+        layout.addWidget(self.planning_card, 1)
+        self.preview_card = Card("脚本预览", panel)
         self.output_panel = ScriptOutputPanel(self.preview_card)
         self.preview_card.content_layout.addWidget(self.output_panel)
-        layout.addWidget(self.preview_card, 2)
-        return panel
+        self.preview_card.setMinimumHeight(420)
+        layout.addWidget(self.preview_card, 3)
+        layout.addStretch(1)
+        scroll.setWidget(panel)
+        return scroll
 
     def _build_workspace_card(self) -> Card:
-        card = Card("Workspace", self)
-
-        hero = QFrame(card)
-        hero.setProperty("hero", True)
-        hero_layout = QVBoxLayout(hero)
-        hero_layout.setContentsMargins(18, 16, 18, 16)
-        hero_layout.setSpacing(12)
-
+        card = Card("工作区", self)
         top_row = QHBoxLayout()
-        top_row.setSpacing(10)
         branding = QVBoxLayout()
-        branding.setSpacing(2)
-        kicker = QLabel("辰华原位阻抗脚本生成终端", hero)
-        kicker.setObjectName("heroKicker")
-        title = QLabel("可切换的序列编辑器", hero)
-        title.setObjectName("heroTitle")
-        body = QLabel("工步类型在行内切换；上方只保留一个主新增动作，模板用于快速填充。", hero)
-        body.setObjectName("heroBody")
-        branding.addWidget(kicker)
-        branding.addWidget(title)
-        branding.addWidget(body)
-
+        branding.addWidget(QLabel("CHI 原位阻抗", card))
+        copy = QLabel("聚焦工步序列编辑与脚本预览。", card)
+        copy.setWordWrap(True)
+        branding.addWidget(copy)
         mode_box = QVBoxLayout()
-        mode_box.setSpacing(4)
-        mode_label = QLabel("工作区模式", hero)
-        mode_label.setObjectName("metaLabel")
-        self.mode_combo = NoWheelComboBox(hero)
-        self.mode_combo.addItem("工步序列", WorkspaceMode.SEQUENCE.value)
-        self.mode_combo.addItem("Pulse", WorkspaceMode.PULSE.value)
+        mode_box.addWidget(QLabel("模式", card))
+        self.mode_combo = NoWheelComboBox(card)
+        self.mode_combo.addItem("序列", WorkspaceMode.SEQUENCE.value)
+        self.mode_combo.addItem("脉冲", WorkspaceMode.PULSE.value)
         self.mode_combo.setMinimumWidth(180)
         self._scenario = self.mode_combo
-        mode_box.addWidget(mode_label)
         mode_box.addWidget(self.mode_combo)
-
         top_row.addLayout(branding, 1)
         top_row.addLayout(mode_box)
-        hero_layout.addLayout(top_row)
-
+        card.content_layout.addLayout(top_row)
         preset_row = QHBoxLayout()
-        preset_row.setSpacing(8)
-        self.new_preset_button = QPushButton("新建预设", hero)
-        self.open_preset_button = QPushButton("打开", hero)
-        self.save_preset_button = QPushButton("保存", hero)
-        self.save_as_preset_button = QPushButton("另存为", hero)
-        self.recent_presets_combo = NoWheelComboBox(hero)
+        self.new_preset_button = self._button("新建", card)
+        self.open_preset_button = self._button("打开", card)
+        self.save_preset_button = self._button("保存", card)
+        self.save_as_preset_button = self._button("另存为", card)
+        self.recent_presets_combo = NoWheelComboBox(card)
         self.recent_presets_combo.setMinimumWidth(220)
-        self.recent_preset_combo = self.recent_presets_combo
         self.recent_presets_combo.addItem("最近预设", "")
-        for button in (
-            self.new_preset_button,
-            self.open_preset_button,
-            self.save_preset_button,
-            self.save_as_preset_button,
-        ):
-            button.setObjectName("ghostButton")
-        preset_row.addWidget(self.new_preset_button)
-        preset_row.addWidget(self.open_preset_button)
-        preset_row.addWidget(self.save_preset_button)
-        preset_row.addWidget(self.save_as_preset_button)
+        for button in (self.new_preset_button, self.open_preset_button, self.save_preset_button, self.save_as_preset_button):
+            preset_row.addWidget(button)
         preset_row.addStretch(1)
         preset_row.addWidget(self.recent_presets_combo)
-        hero_layout.addLayout(preset_row)
-
-        card.content_layout.addWidget(hero)
+        card.content_layout.addLayout(preset_row)
         return card
 
     def _build_project_card(self) -> Card:
-        card = Card("Project", self)
+        card = Card("项目", self)
         form = QFormLayout()
-        form.setContentsMargins(0, 0, 0, 0)
-        form.setHorizontalSpacing(14)
-        form.setVerticalSpacing(10)
-        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
-
         self.scheme_name_edit = self._line_edit("方案名称")
         self.file_prefix_edit = self._line_edit("文件前缀")
         self.export_dir_edit = self._line_edit("导出目录")
         export_row = QHBoxLayout()
-        export_row.setSpacing(8)
         export_row.addWidget(self.export_dir_edit, 1)
-        self.export_dir_browse_button = QPushButton("浏览", card)
-        self.export_dir_browse_button.setObjectName("ghostButton")
+        self.export_dir_browse_button = self._button("浏览", card)
         export_row.addWidget(self.export_dir_browse_button)
-        export_wrap = QWidget(card)
-        export_wrap.setLayout(export_row)
-
+        wrap = QWidget(card)
+        wrap.setLayout(export_row)
         form.addRow("方案名称", self.scheme_name_edit)
-        form.addRow("命名前缀", self.file_prefix_edit)
-        form.addRow("导出目录", export_wrap)
+        form.addRow("文件前缀", self.file_prefix_edit)
+        form.addRow("导出目录", wrap)
         card.content_layout.addLayout(form)
         return card
 
     def _build_battery_card(self) -> Card:
-        card = Card("Battery & Current", self)
-        form = QFormLayout()
-        form.setContentsMargins(0, 0, 0, 0)
-        form.setHorizontalSpacing(14)
-        form.setVerticalSpacing(10)
-        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
-
+        card = Card("电池与电流", self)
+        self.battery_form = QFormLayout()
         self.active_material_edit = self._line_edit("活性物质量 / mg")
-        self.theoretical_capacity_edit = self._line_edit("理论容量 / mAh/g")
-        self.current_basis_value = QLabel("按活性物质量换算 1C 电流", card)
-        self.current_basis_value.setObjectName("inlineValue")
+        self.theoretical_capacity_edit = self._line_edit("理论比容量 / mAh g-1")
+        self.current_basis_mode_combo = NoWheelComboBox(card)
+        self.current_basis_mode_combo.addItem("按材料理论容量", CurrentBasisUiMode.MATERIAL.value)
+        self.current_basis_mode_combo.addItem("按已知倍率电流", CurrentBasisUiMode.REFERENCE.value)
+        self.reference_rate_edit = self._line_edit("已知倍率 / C")
+        self.reference_current_edit = self._line_edit("对应电流 / A")
+        self.current_basis_value = QLabel("半电池通常直接按材料参数换算 1C。", card)
         self.current_operating_value = QLabel("-", card)
-        self.current_operating_value.setObjectName("accentValue")
-
-        form.addRow("活性物质量 / mg", self.active_material_edit)
-        form.addRow("理论容量 / mAh/g", self.theoretical_capacity_edit)
-        form.addRow("电流基准", self.current_basis_value)
-        form.addRow("当前工作电流", self.current_operating_value)
-        card.content_layout.addLayout(form)
+        self.battery_form.addRow("活性物质量 / mg", self.active_material_edit)
+        self.battery_form.addRow("理论比容量 / mAh g-1", self.theoretical_capacity_edit)
+        self.battery_form.addRow("1C 换算方式", self.current_basis_mode_combo)
+        self.battery_form.addRow("已知倍率 / C", self.reference_rate_edit)
+        self.battery_form.addRow("对应电流 / A", self.reference_current_edit)
+        self.battery_form.addRow("1C 基准", self.current_basis_value)
+        self.battery_form.addRow("当前预览", self.current_operating_value)
+        card.content_layout.addLayout(self.battery_form)
         return card
 
     def _build_workstep_card(self) -> Card:
-        card = Card("Worksteps", self)
-
+        card = Card("工步列表", self)
         header = QHBoxLayout()
-        header.setSpacing(8)
         self.workstep_count_pill = self._metric_pill("1 个工步")
-        self.total_points_pill = self._metric_pill("24 点")
-        self.total_eis_pill = self._metric_pill("24 EIS")
+        self.total_points_pill = self._metric_pill("0 点")
+        self.total_eis_pill = self._metric_pill("0 次 EIS")
         header.addStretch(1)
         header.addWidget(self.workstep_count_pill)
         header.addWidget(self.total_points_pill)
         header.addWidget(self.total_eis_pill)
         card.content_layout.addLayout(header)
-
         toolbar = QHBoxLayout()
-        toolbar.setSpacing(8)
-        self.add_workstep_button = QPushButton("添加工步", card)
-        self.add_workstep_button.setObjectName("primaryButton")
-        self.time_template_button = QPushButton("固定时间点模板", card)
-        self.voltage_template_button = QPushButton("固定电压点模板", card)
-        self.activation_template_button = QPushButton("充放交替模板", card)
-        for button in (self.time_template_button, self.voltage_template_button, self.activation_template_button):
-            button.setObjectName("ghostButton")
+        self.add_workstep_button = self._button("新增时间工步", card, primary=True)
+        self.add_voltage_phase_button = self._button("新增电压工步", card)
+        self.add_rest_phase_button = self._button("新增静置工步", card)
+        self.create_loop_button = self._button("创建循环块", card)
         toolbar.addWidget(self.add_workstep_button)
-        toolbar.addWidget(self.time_template_button)
-        toolbar.addWidget(self.voltage_template_button)
-        toolbar.addWidget(self.activation_template_button)
+        toolbar.addWidget(self.add_voltage_phase_button)
+        toolbar.addWidget(self.add_rest_phase_button)
+        toolbar.addWidget(self.create_loop_button)
         toolbar.addStretch(1)
         card.content_layout.addLayout(toolbar)
-
-        self.workstep_intro_label = QLabel(
-            "统一从默认工步开始，类型可在每一行内切换；模板只负责快速起手，不再和新增入口重复。",
-            card,
-        )
-        self.workstep_intro_label.setObjectName("mutedLabel")
-        self.workstep_intro_label.setWordWrap(True)
-        card.content_layout.addWidget(self.workstep_intro_label)
-
-        hidden_button_host = QWidget(card)
-        hidden_layout = QHBoxLayout(hidden_button_host)
-        hidden_layout.setContentsMargins(0, 0, 0, 0)
-        hidden_layout.setSpacing(0)
-        self.add_time_phase_button = QPushButton("添加时间工步", hidden_button_host)
-        self.add_voltage_phase_button = QPushButton("添加电压工步", hidden_button_host)
-        self.add_rest_phase_button = QPushButton("添加静置工步", hidden_button_host)
-        for button in (self.add_time_phase_button, self.add_voltage_phase_button, self.add_rest_phase_button):
-            button.hide()
-            hidden_layout.addWidget(button)
-        card.content_layout.addWidget(hidden_button_host)
-        hidden_button_host.hide()
-
+        intro = QLabel("“点前等待”只作用于受控工步；“静置工步”表示真正独立的静置阶段。", card)
+        intro.setWordWrap(True)
+        card.content_layout.addWidget(intro)
         self.phase_container = QWidget(card)
         self.phase_layout = QVBoxLayout(self.phase_container)
         self.phase_layout.setContentsMargins(0, 0, 0, 0)
@@ -330,23 +243,17 @@ class MainWindow(QMainWindow):
         return card
 
     def _build_pulse_card(self) -> Card:
-        card = Card("Pulse", self)
+        card = Card("脉冲参数", self)
         self.pulse_form = QFormLayout()
-        self.pulse_form.setContentsMargins(0, 0, 0, 0)
-        self.pulse_form.setHorizontalSpacing(14)
-        self.pulse_form.setVerticalSpacing(10)
-        self.pulse_form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
-
         self.pulse_relaxation_mode_combo = NoWheelComboBox(card)
         self.pulse_relaxation_mode_combo.addItem("静置", RelaxationUiMode.REST.value)
         self.pulse_relaxation_mode_combo.addItem("恒流", RelaxationUiMode.CONSTANT_CURRENT.value)
-        self.pulse_relaxation_time_edit = self._line_edit("恢复时长 / s")
+        self.pulse_relaxation_time_edit = self._line_edit("弛豫时间 / s")
         self.pulse_relaxation_current_mode_combo = NoWheelComboBox(card)
         self.pulse_relaxation_current_mode_combo.addItem("倍率", CurrentInputUiMode.RATE.value)
         self.pulse_relaxation_current_mode_combo.addItem("绝对电流", CurrentInputUiMode.ABSOLUTE.value)
-        self.pulse_relaxation_rate_edit = self._line_edit("恢复倍率 / C")
-        self.pulse_relaxation_current_edit = self._line_edit("恢复电流 / A")
-
+        self.pulse_relaxation_rate_edit = self._line_edit("弛豫倍率 / C")
+        self.pulse_relaxation_current_edit = self._line_edit("弛豫电流 / A")
         self.pulse_current_mode_combo = NoWheelComboBox(card)
         self.pulse_current_mode_combo.addItem("倍率", CurrentInputUiMode.RATE.value)
         self.pulse_current_mode_combo.addItem("绝对电流", CurrentInputUiMode.ABSOLUTE.value)
@@ -355,53 +262,54 @@ class MainWindow(QMainWindow):
         self.pulse_duration_edit = self._line_edit("脉冲时长 / s")
         self.pulse_count_edit = self._line_edit("脉冲次数")
         self.pulse_sample_interval_edit = self._preset_combo(["0.001", "0.002", "0.005", "0.01", "0.1", "1"])
-        self.pulse_upper_voltage_edit = self._line_edit("电压上限 / V")
-        self.pulse_lower_voltage_edit = self._line_edit("电压下限 / V")
-        self.pulse_pre_wait_edit = self._line_edit("阶段前等待 / s")
-
-        self.pulse_form.addRow("恢复模式", self.pulse_relaxation_mode_combo)
-        self.pulse_form.addRow("恢复时长 / s", self.pulse_relaxation_time_edit)
-        self.pulse_form.addRow("恢复电流模式", self.pulse_relaxation_current_mode_combo)
-        self.pulse_form.addRow("恢复倍率 / C", self.pulse_relaxation_rate_edit)
-        self.pulse_form.addRow("恢复电流 / A", self.pulse_relaxation_current_edit)
-        self.pulse_form.addRow("脉冲电流模式", self.pulse_current_mode_combo)
-        self.pulse_form.addRow("脉冲倍率 / C", self.pulse_rate_edit)
-        self.pulse_form.addRow("脉冲电流 / A", self.pulse_current_edit)
-        self.pulse_form.addRow("脉冲时长 / s", self.pulse_duration_edit)
-        self.pulse_form.addRow("脉冲次数", self.pulse_count_edit)
-        self.pulse_form.addRow("采样间隔 / s", self.pulse_sample_interval_edit)
-        self.pulse_form.addRow("电压上限 / V", self.pulse_upper_voltage_edit)
-        self.pulse_form.addRow("电压下限 / V", self.pulse_lower_voltage_edit)
-        self.pulse_form.addRow("阶段前等待 / s", self.pulse_pre_wait_edit)
+        self.pulse_upper_voltage_edit = self._line_edit("上限电压 / V")
+        self.pulse_lower_voltage_edit = self._line_edit("下限电压 / V")
+        self.pulse_pre_wait_edit = self._line_edit("点前等待 / s")
+        for label, field in (
+            ("弛豫模式", self.pulse_relaxation_mode_combo),
+            ("弛豫时间 / s", self.pulse_relaxation_time_edit),
+            ("弛豫电流输入", self.pulse_relaxation_current_mode_combo),
+            ("弛豫倍率 / C", self.pulse_relaxation_rate_edit),
+            ("弛豫电流 / A", self.pulse_relaxation_current_edit),
+            ("脉冲电流输入", self.pulse_current_mode_combo),
+            ("脉冲倍率 / C", self.pulse_rate_edit),
+            ("脉冲电流 / A", self.pulse_current_edit),
+            ("脉冲时长 / s", self.pulse_duration_edit),
+            ("脉冲次数", self.pulse_count_edit),
+            ("采样间隔 / s", self.pulse_sample_interval_edit),
+            ("上限电压 / V", self.pulse_upper_voltage_edit),
+            ("下限电压 / V", self.pulse_lower_voltage_edit),
+            ("点前等待 / s", self.pulse_pre_wait_edit),
+        ):
+            self.pulse_form.addRow(label, field)
         card.content_layout.addLayout(self.pulse_form)
         return card
 
     def _build_impedance_card(self) -> Card:
-        card = Card("Impedance", self)
-        form = QFormLayout()
-        form.setContentsMargins(0, 0, 0, 0)
-        form.setHorizontalSpacing(14)
-        form.setVerticalSpacing(10)
-        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
-
-        self.use_open_circuit_init_e_box = QCheckBox("使用开路电位作为 Init E", card)
-        self.init_e_v_edit = self._line_edit("Init E / V")
+        card = Card("阻抗参数", self)
+        self.impedance_form = QFormLayout()
+        self.use_open_circuit_init_e_box = QCheckBox("使用开路电位作为初始电位（Eoc）", card)
+        self.init_e_v_edit = self._line_edit("手动初始电位 / V")
         self.high_frequency_edit = self._line_edit("高频 / Hz")
         self.low_frequency_edit = self._line_edit("低频 / Hz")
-        self.amplitude_edit = self._line_edit("振幅 / V")
+        self.amplitude_edit = self._line_edit("电压振幅 / V")
         self.quiet_time_edit = self._line_edit("静置时间 / s")
-
-        form.addRow("", self.use_open_circuit_init_e_box)
-        form.addRow("Init E / V", self.init_e_v_edit)
-        form.addRow("高频 / Hz", self.high_frequency_edit)
-        form.addRow("低频 / Hz", self.low_frequency_edit)
-        form.addRow("振幅 / V", self.amplitude_edit)
-        form.addRow("静置时间 / s", self.quiet_time_edit)
-        card.content_layout.addLayout(form)
+        self.impedance_form.addRow("", self.use_open_circuit_init_e_box)
+        self.impedance_form.addRow("初始电位 / V", self.init_e_v_edit)
+        self.impedance_form.addRow("高频 / Hz", self.high_frequency_edit)
+        self.impedance_form.addRow("低频 / Hz", self.low_frequency_edit)
+        self.impedance_form.addRow("电压振幅 / V", self.amplitude_edit)
+        self.impedance_form.addRow("静置时间 / s", self.quiet_time_edit)
+        card.content_layout.addLayout(self.impedance_form)
         return card
 
-    def _line_edit(self, placeholder: str) -> QLineEdit:
-        edit = QLineEdit(self)
+    def _button(self, text: str, parent: QWidget | None = None, *, primary: bool = False) -> PushButton:
+        button = PrimaryPushButton(parent) if primary else PushButton(parent)
+        button.setText(text)
+        return button
+
+    def _line_edit(self, placeholder: str) -> LineEdit:
+        edit = LineEdit(self)
         edit.setPlaceholderText(placeholder)
         return edit
 
@@ -417,21 +325,14 @@ class MainWindow(QMainWindow):
         return label
 
     def _connect_signals(self) -> None:
-        self.mode_combo.currentIndexChanged.connect(self._sync_workspace_mode)
-        self.mode_combo.currentIndexChanged.connect(self.schedule_refresh)
-        self.new_preset_button.clicked.connect(self.new_preset)
-        self.open_preset_button.clicked.connect(self.open_preset)
-        self.save_preset_button.clicked.connect(self.save_preset)
-        self.save_as_preset_button.clicked.connect(self.save_preset_as)
-        self.recent_presets_combo.activated.connect(self._open_selected_recent_preset)
-        self.export_dir_browse_button.clicked.connect(self._browse_export_directory)
-
-        for edit in (
+        edits = (
             self.scheme_name_edit,
             self.file_prefix_edit,
             self.export_dir_edit,
             self.active_material_edit,
             self.theoretical_capacity_edit,
+            self.reference_rate_edit,
+            self.reference_current_edit,
             self.init_e_v_edit,
             self.high_frequency_edit,
             self.low_frequency_edit,
@@ -447,317 +348,200 @@ class MainWindow(QMainWindow):
             self.pulse_upper_voltage_edit,
             self.pulse_lower_voltage_edit,
             self.pulse_pre_wait_edit,
-        ):
+        )
+        for edit in edits:
             edit.textChanged.connect(self.schedule_refresh)
-
-        for combo in (
-            self.pulse_relaxation_mode_combo,
-            self.pulse_relaxation_current_mode_combo,
-            self.pulse_current_mode_combo,
-            self.pulse_sample_interval_edit,
-        ):
+        for combo in (self.mode_combo, self.pulse_relaxation_mode_combo, self.pulse_relaxation_current_mode_combo, self.pulse_current_mode_combo, self.pulse_sample_interval_edit):
             if isinstance(combo, PresetComboBox):
                 combo.currentIndexChanged.connect(self.schedule_refresh)
                 combo.lineEdit().textChanged.connect(self.schedule_refresh)
             else:
                 combo.currentIndexChanged.connect(self.schedule_refresh)
-
+        self.mode_combo.currentIndexChanged.connect(self._sync_workspace_mode)
+        self.current_basis_mode_combo.currentIndexChanged.connect(self._sync_current_basis_visibility)
+        self.current_basis_mode_combo.currentIndexChanged.connect(self.schedule_refresh)
         self.use_open_circuit_init_e_box.toggled.connect(self._sync_init_e_visibility)
         self.use_open_circuit_init_e_box.toggled.connect(self.schedule_refresh)
         self.pulse_relaxation_mode_combo.currentIndexChanged.connect(self._sync_pulse_field_visibility)
         self.pulse_relaxation_current_mode_combo.currentIndexChanged.connect(self._sync_pulse_field_visibility)
         self.pulse_current_mode_combo.currentIndexChanged.connect(self._sync_pulse_field_visibility)
-
+        self.export_dir_browse_button.clicked.connect(self._browse_export_directory)
+        self.new_preset_button.clicked.connect(self.new_preset)
+        self.open_preset_button.clicked.connect(self.open_preset)
+        self.save_preset_button.clicked.connect(self.save_preset)
+        self.save_as_preset_button.clicked.connect(self.save_preset_as)
+        self.recent_presets_combo.currentIndexChanged.connect(self._open_selected_recent_preset)
         self.add_workstep_button.clicked.connect(lambda: self._append_phase(PhaseUiKind.TIME_POINTS))
-        self.add_time_phase_button.clicked.connect(lambda: self._append_phase(PhaseUiKind.TIME_POINTS))
         self.add_voltage_phase_button.clicked.connect(lambda: self._append_phase(PhaseUiKind.VOLTAGE_POINTS))
         self.add_rest_phase_button.clicked.connect(lambda: self._append_phase(PhaseUiKind.REST))
-        self.time_template_button.clicked.connect(self._apply_time_template)
-        self.voltage_template_button.clicked.connect(self._apply_voltage_template)
-        self.activation_template_button.clicked.connect(self._apply_activation_template)
+        self.create_loop_button.clicked.connect(self._create_loop_from_selection)
 
     def _apply_defaults(self) -> None:
-        self._updating_ui = True
-        try:
-            defaults = GuiState()
-            self.scheme_name_edit.setText(defaults.scheme_name)
-            self.file_prefix_edit.setText(defaults.file_prefix)
-            self.export_dir_edit.setText(defaults.export_dir)
-            self.active_material_edit.setText(defaults.active_material_mg)
-            self.theoretical_capacity_edit.setText(defaults.theoretical_capacity_mah_mg)
-            self.use_open_circuit_init_e_box.setChecked(defaults.use_open_circuit_init_e)
-            self.init_e_v_edit.setText(defaults.init_e_v)
-            self.high_frequency_edit.setText(defaults.high_frequency_hz)
-            self.low_frequency_edit.setText(defaults.low_frequency_hz)
-            self.amplitude_edit.setText(defaults.amplitude_v)
-            self.quiet_time_edit.setText(defaults.quiet_time_s)
-            self.pulse_relaxation_mode_combo.setCurrentIndex(
-                self.pulse_relaxation_mode_combo.findData(defaults.pulse_relaxation_mode.value)
-            )
-            self.pulse_relaxation_time_edit.setText(defaults.pulse_relaxation_time_s)
-            self.pulse_relaxation_current_mode_combo.setCurrentIndex(
-                self.pulse_relaxation_current_mode_combo.findData(defaults.pulse_relaxation_current_mode.value)
-            )
-            self.pulse_relaxation_rate_edit.setText(defaults.pulse_relaxation_rate_c)
-            self.pulse_relaxation_current_edit.setText(defaults.pulse_relaxation_current_a)
-            self.pulse_current_mode_combo.setCurrentIndex(self.pulse_current_mode_combo.findData(defaults.pulse_current_mode.value))
-            self.pulse_rate_edit.setText(defaults.pulse_current_rate_c)
-            self.pulse_current_edit.setText(defaults.pulse_current_a)
-            self.pulse_duration_edit.setText(defaults.pulse_duration_s)
-            self.pulse_count_edit.setText(defaults.pulse_count)
-            self.pulse_sample_interval_edit.setEditText(defaults.pulse_sample_interval_s)
-            self.pulse_upper_voltage_edit.setText(defaults.pulse_upper_voltage_v)
-            self.pulse_lower_voltage_edit.setText(defaults.pulse_lower_voltage_v)
-            self.pulse_pre_wait_edit.setText(defaults.pulse_pre_wait_s)
-            self.mode_combo.setCurrentIndex(self.mode_combo.findData(defaults.workspace_mode.value))
-            self._rebuild_phase_rows(defaults.phases)
-        finally:
-            self._updating_ui = False
-        self._sync_workspace_mode()
-        self._sync_pulse_field_visibility()
-        self._sync_init_e_visibility()
-        self._refresh_workstep_metrics()
+        self._apply_state(GuiState())
+        self._sync_current_basis_visibility()
 
     def _apply_styles(self) -> None:
         self.setStyleSheet(
             """
-            QMainWindow {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #f4f7fb, stop:1 #eef3f9);
-                color: #0f172a;
-                font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
-                font-size: 10pt;
-            }
-            QWidget {
-                color: #0f172a;
-                font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
-            }
-            QFrame[card="true"] {
-                background: rgba(255, 255, 255, 0.86);
-                border: 1px solid rgba(182, 197, 214, 0.72);
-                border-radius: 20px;
-            }
-            QFrame[hero="true"] {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 rgba(16, 71, 164, 0.97), stop:1 rgba(84, 143, 232, 0.92));
-                border: 0;
-                border-radius: 18px;
-            }
-            QLabel#cardTitle {
-                font-size: 15pt;
-                font-weight: 700;
-                color: #0f172a;
-            }
-            QLabel#heroKicker {
-                color: rgba(255, 255, 255, 0.82);
-                font-size: 9pt;
-                font-weight: 600;
-                letter-spacing: 0.4px;
-            }
-            QLabel#heroTitle {
-                color: white;
-                font-size: 21pt;
-                font-weight: 750;
-            }
-            QLabel#heroBody {
-                color: rgba(255, 255, 255, 0.88);
-                font-size: 10pt;
-            }
-            QLabel#metaLabel, QLabel#mutedLabel, QLabel#phaseHint, QLabel#fieldLabel {
-                color: #526277;
-            }
-            QLabel#metricText, QLabel#accentValue {
-                color: #1357d6;
-                font-weight: 700;
-            }
-            QLabel#inlineValue {
-                color: #334155;
-                font-weight: 600;
-            }
-            QLabel#metricPill, QLabel#pointPill {
-                background: rgba(19, 87, 214, 0.10);
-                color: #1357d6;
-                border: 1px solid rgba(19, 87, 214, 0.18);
-                border-radius: 999px;
-                padding: 6px 12px;
-                font-weight: 700;
-            }
-            QLabel#stepBadge {
-                background: #1357d6;
-                color: white;
-                border-radius: 12px;
-                padding: 8px 12px;
-                font-weight: 800;
-            }
-            QFrame[workstepRow="true"] {
-                background: rgba(252, 253, 255, 0.95);
-                border: 1px solid rgba(193, 205, 220, 0.84);
-                border-radius: 18px;
-            }
-            QLineEdit, QComboBox, QPlainTextEdit {
-                background: white;
-                border: 1px solid #c9d3e1;
-                border-radius: 12px;
-                padding: 8px 12px;
-                selection-background-color: #1357d6;
-            }
-            QLineEdit:focus, QComboBox:focus, QPlainTextEdit:focus {
-                border: 1px solid #1357d6;
-            }
-            QPushButton {
-                border-radius: 12px;
-                border: 1px solid #c3cfde;
-                background: rgba(255, 255, 255, 0.92);
-                padding: 8px 14px;
-                font-weight: 600;
-            }
-            QPushButton:hover {
-                background: #f6f9ff;
-                border-color: #a7b9d1;
-            }
-            QPushButton#primaryButton {
-                background: #1357d6;
-                border: 1px solid #1357d6;
-                color: white;
-                padding: 9px 18px;
-                font-weight: 700;
-            }
-            QPushButton#primaryButton:hover {
-                background: #1049b5;
-                border-color: #1049b5;
-            }
-            QPushButton#ghostButton, QPushButton#rowGhostButton {
-                background: rgba(255, 255, 255, 0.88);
-            }
-            QPushButton#secondaryButton {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1357d6, stop:1 #2f7cff);
-                border: 1px solid #1357d6;
-                color: white;
-                padding: 9px 16px;
-                font-weight: 700;
-            }
-            QPushButton#secondaryButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1049b5, stop:1 #2467db);
-                border-color: #1049b5;
-            }
-            QPushButton#secondaryButton:pressed {
-                background: #0e3f9a;
-            }
-            QPushButton#secondaryButton[copied="true"] {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0f9f6e, stop:1 #25c286);
-                border: 1px solid #0f9f6e;
-            }
-            QToolButton#inlineButton {
-                background: rgba(19, 87, 214, 0.08);
-                border: 1px solid rgba(19, 87, 214, 0.16);
-                border-radius: 12px;
-                color: #1357d6;
-                padding: 8px 12px;
-                font-weight: 700;
-            }
-            QLabel#summaryPanel, QPlainTextEdit#summaryPanel {
-                background: rgba(246, 249, 255, 0.94);
-                border: 1px solid rgba(195, 207, 222, 0.82);
-                border-radius: 16px;
-                padding: 14px;
-                color: #1e293b;
-            }
-            QLabel#panelLabel {
-                font-size: 10pt;
-                font-weight: 700;
-                color: #0f172a;
-            }
-            QListWidget {
-                background: rgba(255, 255, 255, 0.95);
-                border: 1px solid rgba(195, 207, 222, 0.82);
-                border-radius: 16px;
-                padding: 6px;
-            }
+            QWidget { color: #e6edf3; font-family: 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', sans-serif; }
+            QWidget#workspacePage { background-color: #0d1117; }
+            QWidget#leftPanel, QWidget#rightPanel, QScrollArea#leftScrollArea, QScrollArea#rightScrollArea, QWidget#leftScrollBody { background-color: #0d1117; }
+            #cardWidget { background-color: #161b22; border: 1px solid #30363d; border-radius: 8px; }
+            #cardTitle { color: #79c0ff; font-size: 15px; font-weight: 700; }
+            #fieldLabel, #panelLabel, #phaseHint { color: #8b949e; font-size: 12px; }
+            QLineEdit, QTextEdit, QPlainTextEdit { background-color: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 4px 6px; selection-background-color: #1f6feb; }
+            #stepBadge { background-color: #1b2532; color: #79c0ff; border: 1px solid #35516f; border-radius: 6px; font-weight: 700; padding: 4px 8px; }
+            #metricPill { padding: 4px 10px; border-radius: 10px; background-color: rgba(56, 139, 253, 0.15); color: #79c0ff; border: 1px solid rgba(56, 139, 253, 0.35); }
+            #summaryPanel { background-color: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 8px; }
+            QFrame[workstepRow="true"] { background-color: #0f1620; border: 1px solid #263241; border-radius: 8px; }
             """
         )
 
     def _make_default_phase(self, kind: PhaseUiKind, index: int) -> GuiPhaseState:
-        if kind is PhaseUiKind.VOLTAGE_POINTS:
-            return GuiPhaseState(label=f"工步 {index}", phase_kind=PhaseUiKind.VOLTAGE_POINTS)
-        if kind is PhaseUiKind.REST:
-            return GuiPhaseState(label=f"工步 {index}", phase_kind=PhaseUiKind.REST)
-        return GuiPhaseState(label=f"工步 {index}", phase_kind=PhaseUiKind.TIME_POINTS)
+        names = {
+            PhaseUiKind.TIME_POINTS: "时间工步",
+            PhaseUiKind.VOLTAGE_POINTS: "电压工步",
+            PhaseUiKind.REST: "静置工步",
+        }
+        return GuiPhaseState(label=f"{names[kind]} {index}", phase_kind=kind)
 
-    def _rebuild_phase_rows(self, phase_states: list[GuiPhaseState]) -> None:
+    def _collect_workflow_items(self) -> list[WorkflowItemState]:
+        items: list[WorkflowItemState] = []
+        for widget in self.workflow_widgets:
+            items.append(widget.collect_state())
+        return items
+
+    def _rebuild_workflow_widgets(self, items: list[WorkflowItemState]) -> None:
         while self.phase_layout.count():
             item = self.phase_layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
+        self.workflow_widgets.clear()
         self.phase_editors.clear()
-        seed_states = phase_states or [GuiPhaseState()]
-        for index, state in enumerate(seed_states, start=1):
-            row = WorkstepEditorRow(
-                index=index,
-                state=state,
-                on_change=self.schedule_refresh,
-                on_move_up=self._move_phase_up,
-                on_move_down=self._move_phase_down,
-                on_delete=self._delete_phase,
-                parent=self.phase_container,
-            )
-            self.phase_layout.addWidget(row)
-            self.phase_editors.append(row)
-        self._sync_phase_order_state()
+        if not items:
+            items = [GuiPhaseState()]
+        for index, item in enumerate(items, start=1):
+            if isinstance(item, GuiLoopState):
+                widget = LoopBlockWidget(
+                    index,
+                    item,
+                    on_change=self.schedule_refresh,
+                    on_move_up=self._move_loop_up,
+                    on_move_down=self._move_loop_down,
+                    on_delete=self._delete_loop,
+                    on_duplicate=self._duplicate_loop,
+                    parent=self.phase_container,
+                )
+            else:
+                widget = WorkstepEditorRow(
+                    index,
+                    item,
+                    on_change=self.schedule_refresh,
+                    on_move_up=self._move_phase_up,
+                    on_move_down=self._move_phase_down,
+                    on_delete=self._delete_phase,
+                    parent=self.phase_container,
+                )
+                self.phase_editors.append(widget)
+            self.phase_layout.addWidget(widget)
+            self.workflow_widgets.append(widget)
+        self._sync_workflow_order_state()
 
-    def _sync_phase_order_state(self) -> None:
-        total = len(self.phase_editors)
-        for index, row in enumerate(self.phase_editors, start=1):
-            row.set_order_state(index, total)
-        self._refresh_workstep_metrics()
+    def _sync_workflow_order_state(self) -> None:
+        total = len(self.workflow_widgets)
+        self.phase_editors = [widget for widget in self.workflow_widgets if isinstance(widget, WorkstepEditorRow)]
+        for index, widget in enumerate(self.workflow_widgets, start=1):
+            widget.set_order_state(index, total)
 
     def _append_phase(self, kind: PhaseUiKind) -> None:
-        states = [row.collect_state() for row in self.phase_editors]
-        states.append(self._make_default_phase(kind, len(states) + 1))
-        self._rebuild_phase_rows(states)
+        items = self._collect_workflow_items()
+        flat_index = len(expand_workflow_items(items)) + 1
+        items.append(self._make_default_phase(kind, flat_index))
+        self._rebuild_workflow_widgets(items)
         self.schedule_refresh()
 
     def _move_phase_up(self, row: WorkstepEditorRow) -> None:
-        index = self.phase_editors.index(row)
+        index = self.workflow_widgets.index(row)
         if index <= 0:
             return
-        states = [editor.collect_state() for editor in self.phase_editors]
-        states[index - 1], states[index] = states[index], states[index - 1]
-        self._rebuild_phase_rows(states)
+        items = self._collect_workflow_items()
+        items[index - 1], items[index] = items[index], items[index - 1]
+        self._rebuild_workflow_widgets(items)
         self.schedule_refresh()
 
     def _move_phase_down(self, row: WorkstepEditorRow) -> None:
-        index = self.phase_editors.index(row)
-        if index >= len(self.phase_editors) - 1:
+        index = self.workflow_widgets.index(row)
+        if index >= len(self.workflow_widgets) - 1:
             return
-        states = [editor.collect_state() for editor in self.phase_editors]
-        states[index + 1], states[index] = states[index], states[index + 1]
-        self._rebuild_phase_rows(states)
+        items = self._collect_workflow_items()
+        items[index + 1], items[index] = items[index], items[index + 1]
+        self._rebuild_workflow_widgets(items)
         self.schedule_refresh()
 
     def _delete_phase(self, row: WorkstepEditorRow) -> None:
-        if len(self.phase_editors) <= 1:
+        if len(self.workflow_widgets) <= 1:
             return
-        states = [editor.collect_state() for editor in self.phase_editors if editor is not row]
-        self._rebuild_phase_rows(states)
+        index = self.workflow_widgets.index(row)
+        items = self._collect_workflow_items()
+        del items[index]
+        self._rebuild_workflow_widgets(items)
         self.schedule_refresh()
 
-    def _apply_time_template(self) -> None:
-        self._rebuild_phase_rows([GuiPhaseState(label="工步 1", phase_kind=PhaseUiKind.TIME_POINTS)])
+    def _move_loop_up(self, loop: LoopBlockWidget) -> None:
+        index = self.workflow_widgets.index(loop)
+        if index <= 0:
+            return
+        items = self._collect_workflow_items()
+        items[index - 1], items[index] = items[index], items[index - 1]
+        self._rebuild_workflow_widgets(items)
         self.schedule_refresh()
 
-    def _apply_voltage_template(self) -> None:
-        self._rebuild_phase_rows([GuiPhaseState(label="工步 1", phase_kind=PhaseUiKind.VOLTAGE_POINTS)])
+    def _move_loop_down(self, loop: LoopBlockWidget) -> None:
+        index = self.workflow_widgets.index(loop)
+        if index >= len(self.workflow_widgets) - 1:
+            return
+        items = self._collect_workflow_items()
+        items[index + 1], items[index] = items[index], items[index + 1]
+        self._rebuild_workflow_widgets(items)
         self.schedule_refresh()
 
-    def _apply_activation_template(self) -> None:
-        states = [
-            GuiPhaseState(label="工步 1", phase_kind=PhaseUiKind.TIME_POINTS, direction="charge"),
-            GuiPhaseState(label="工步 2", phase_kind=PhaseUiKind.REST, rest_duration_s="300"),
-            GuiPhaseState(label="工步 3", phase_kind=PhaseUiKind.TIME_POINTS, direction="discharge"),
-        ]
-        self._rebuild_phase_rows(states)
+    def _delete_loop(self, loop: LoopBlockWidget) -> None:
+        if len(self.workflow_widgets) <= 1:
+            return
+        index = self.workflow_widgets.index(loop)
+        items = self._collect_workflow_items()
+        del items[index]
+        self._rebuild_workflow_widgets(items)
+        self.schedule_refresh()
+
+    def _duplicate_loop(self, loop: LoopBlockWidget) -> None:
+        index = self.workflow_widgets.index(loop)
+        items = self._collect_workflow_items()
+        items.insert(index + 1, loop.collect_state().model_copy(deep=True))
+        self._rebuild_workflow_widgets(items)
+        self.schedule_refresh()
+
+    def _create_loop_from_selection(self) -> None:
+        selected_indexes = [index for index, widget in enumerate(self.workflow_widgets) if isinstance(widget, WorkstepEditorRow) and widget.is_selected()]
+        if len(selected_indexes) < 2:
+            self.statusBar().showMessage("至少选择两个连续工步才能创建循环块。")
+            return
+        if selected_indexes != list(range(selected_indexes[0], selected_indexes[-1] + 1)):
+            self.statusBar().showMessage("循环块只能由连续工步创建。")
+            return
+        items = self._collect_workflow_items()
+        phases = [items[index] for index in selected_indexes]
+        if any(isinstance(item, GuiLoopState) for item in phases):
+            self.statusBar().showMessage("当前版本不支持嵌套循环块。")
+            return
+        loop = GuiLoopState(label=f"循环块 {selected_indexes[0] + 1}", repeat_count=2, phases=[item.model_copy(deep=True) for item in phases if isinstance(item, GuiPhaseState)])
+        updated = items[: selected_indexes[0]] + [loop] + items[selected_indexes[-1] + 1 :]
+        self._rebuild_workflow_widgets(updated)
         self.schedule_refresh()
 
     def _collect_state(self) -> GuiState:
+        workflow_items = self._collect_workflow_items()
         return GuiState.model_validate(
             {
                 "workspace_mode": self.mode_combo.currentData(),
@@ -766,7 +550,11 @@ class MainWindow(QMainWindow):
                 "export_dir": self.export_dir_edit.text(),
                 "active_material_mg": self.active_material_edit.text() or "1",
                 "theoretical_capacity_mah_mg": self.theoretical_capacity_edit.text() or "865",
-                "phases": [row.collect_state() for row in self.phase_editors] or [GuiPhaseState()],
+                "current_basis_mode": self.current_basis_mode_combo.currentData(),
+                "reference_rate_c": self.reference_rate_edit.text() or "1",
+                "reference_current_a": self.reference_current_edit.text() or "0.000865",
+                "workflow_items": workflow_items,
+                "phases": expand_workflow_items(workflow_items),
                 "use_open_circuit_init_e": self.use_open_circuit_init_e_box.isChecked(),
                 "init_e_v": self.init_e_v_edit.text() or "3.2",
                 "high_frequency_hz": self.high_frequency_edit.text() or "100000",
@@ -799,20 +587,19 @@ class MainWindow(QMainWindow):
             self.export_dir_edit.setText(state.export_dir)
             self.active_material_edit.setText(state.active_material_mg)
             self.theoretical_capacity_edit.setText(state.theoretical_capacity_mah_mg)
-            self._rebuild_phase_rows(state.phases)
+            self.current_basis_mode_combo.setCurrentIndex(self.current_basis_mode_combo.findData(state.current_basis_mode.value))
+            self.reference_rate_edit.setText(state.reference_rate_c)
+            self.reference_current_edit.setText(state.reference_current_a)
+            self._rebuild_workflow_widgets(state.workflow_items)
             self.use_open_circuit_init_e_box.setChecked(state.use_open_circuit_init_e)
             self.init_e_v_edit.setText(state.init_e_v)
             self.high_frequency_edit.setText(state.high_frequency_hz)
             self.low_frequency_edit.setText(state.low_frequency_hz)
             self.amplitude_edit.setText(state.amplitude_v)
             self.quiet_time_edit.setText(state.quiet_time_s)
-            self.pulse_relaxation_mode_combo.setCurrentIndex(
-                self.pulse_relaxation_mode_combo.findData(state.pulse_relaxation_mode.value)
-            )
+            self.pulse_relaxation_mode_combo.setCurrentIndex(self.pulse_relaxation_mode_combo.findData(state.pulse_relaxation_mode.value))
             self.pulse_relaxation_time_edit.setText(state.pulse_relaxation_time_s)
-            self.pulse_relaxation_current_mode_combo.setCurrentIndex(
-                self.pulse_relaxation_current_mode_combo.findData(state.pulse_relaxation_current_mode.value)
-            )
+            self.pulse_relaxation_current_mode_combo.setCurrentIndex(self.pulse_relaxation_current_mode_combo.findData(state.pulse_relaxation_current_mode.value))
             self.pulse_relaxation_rate_edit.setText(state.pulse_relaxation_rate_c)
             self.pulse_relaxation_current_edit.setText(state.pulse_relaxation_current_a)
             self.pulse_current_mode_combo.setCurrentIndex(self.pulse_current_mode_combo.findData(state.pulse_current_mode.value))
@@ -827,6 +614,7 @@ class MainWindow(QMainWindow):
         finally:
             self._updating_ui = False
         self._sync_workspace_mode()
+        self._sync_current_basis_visibility()
         self._sync_init_e_visibility()
         self._sync_pulse_field_visibility()
         self.refresh_preview()
@@ -835,41 +623,34 @@ class MainWindow(QMainWindow):
         is_sequence = self.mode_combo.currentData() == WorkspaceMode.SEQUENCE.value
         self.workstep_card.setVisible(is_sequence)
         self.pulse_card.setVisible(not is_sequence)
-        self.workspace_mode_label.setText("Sequence Workspace" if is_sequence else "Pulse Workspace")
-        self.workspace_headline.setText("交替工步在同一条工作流里完成" if is_sequence else "脉冲段与恢复段在同一张表里校准")
-        self.workspace_copy.setText(
-            "统一从工步表格编辑，模板只负责快速起手。"
-            if is_sequence
-            else "Pulse 保留独立页面，恢复段与脉冲段按模式联动显示。"
-        )
+        self.workspace_mode_label.setText("序列模式" if is_sequence else "脉冲模式")
+        self.workspace_headline.setText("工步可组合成循环块并在生成前展开。" if is_sequence else "脉冲参数单独编辑。")
+        self.workspace_copy.setText("范围电压取点会自动补终点；非均匀取点请使用手动列表。" if is_sequence else "脉冲模式已移除持续原位分支。")
         self._refresh_workstep_metrics()
 
     def _sync_init_e_visibility(self) -> None:
         visible = not self.use_open_circuit_init_e_box.isChecked()
+        label = self.impedance_form.labelForField(self.init_e_v_edit)
+        if label is not None:
+            label.setVisible(visible)
         self.init_e_v_edit.setVisible(visible)
-        form = self.impedance_card.content_layout.itemAt(0).layout()
-        if isinstance(form, QFormLayout):
-            label = form.labelForField(self.init_e_v_edit)
+
+    def _sync_current_basis_visibility(self) -> None:
+        visible = self.current_basis_mode_combo.currentData() == CurrentBasisUiMode.REFERENCE.value
+        for widget in (self.reference_rate_edit, self.reference_current_edit):
+            label = self.battery_form.labelForField(widget)
             if label is not None:
                 label.setVisible(visible)
+            widget.setVisible(visible)
+        self.current_basis_value.setText("用已知倍率和对应电流反推 1C。" if visible else "半电池通常直接按材料参数换算 1C。")
 
     def _sync_pulse_field_visibility(self) -> None:
-        relaxation_mode = self.pulse_relaxation_mode_combo.currentData()
-        relaxation_mode_is_cc = relaxation_mode == RelaxationUiMode.CONSTANT_CURRENT.value
+        relaxation_mode_is_cc = self.pulse_relaxation_mode_combo.currentData() == RelaxationUiMode.CONSTANT_CURRENT.value
         pulse_mode_is_absolute = self.pulse_current_mode_combo.currentData() == CurrentInputUiMode.ABSOLUTE.value
         relaxation_mode_is_absolute = self.pulse_relaxation_current_mode_combo.currentData() == CurrentInputUiMode.ABSOLUTE.value
-
         self._set_form_row_visible(self.pulse_form, self.pulse_relaxation_current_mode_combo, relaxation_mode_is_cc)
-        self._set_form_row_visible(
-            self.pulse_form,
-            self.pulse_relaxation_rate_edit,
-            relaxation_mode_is_cc and not relaxation_mode_is_absolute,
-        )
-        self._set_form_row_visible(
-            self.pulse_form,
-            self.pulse_relaxation_current_edit,
-            relaxation_mode_is_cc and relaxation_mode_is_absolute,
-        )
+        self._set_form_row_visible(self.pulse_form, self.pulse_relaxation_rate_edit, relaxation_mode_is_cc and not relaxation_mode_is_absolute)
+        self._set_form_row_visible(self.pulse_form, self.pulse_relaxation_current_edit, relaxation_mode_is_cc and relaxation_mode_is_absolute)
         self._set_form_row_visible(self.pulse_form, self.pulse_rate_edit, not pulse_mode_is_absolute)
         self._set_form_row_visible(self.pulse_form, self.pulse_current_edit, pulse_mode_is_absolute)
 
@@ -881,32 +662,26 @@ class MainWindow(QMainWindow):
 
     def _refresh_workstep_metrics(self, bundle: ScriptBundle | None = None) -> None:
         if self.mode_combo.currentData() != WorkspaceMode.SEQUENCE.value:
-            self.workstep_count_pill.setText("Pulse")
+            self.workstep_count_pill.setText("脉冲模式")
             self.total_points_pill.setText("0 点")
-            self.total_eis_pill.setText("0 EIS")
+            self.total_eis_pill.setText("0 次 EIS")
             return
         if isinstance(bundle, SequenceScriptBundle):
             workstep_count = len(bundle.phase_plans)
             total_points = bundle.total_point_count
             total_eis = bundle.total_eis_count
         else:
-            workstep_count = len(self.phase_editors)
+            state = self._collect_state()
+            workstep_count = len(state.phases)
             total_points = 0
             total_eis = 0
-            for row in self.phase_editors:
-                digits = [int(token) for token in re.findall(r"\d+", row.point_count_label.text())[:2]]
-                if digits:
-                    total_points += digits[0]
-                if len(digits) > 1:
-                    total_eis += digits[1]
         self.workstep_count_pill.setText(f"{workstep_count} 个工步")
         self.total_points_pill.setText(f"{total_points} 点")
-        self.total_eis_pill.setText(f"{total_eis} EIS")
+        self.total_eis_pill.setText(f"{total_eis} 次 EIS")
 
     def schedule_refresh(self, *_: object) -> None:
-        if self._updating_ui:
-            return
-        self._refresh_timer.start()
+        if not self._updating_ui:
+            self._refresh_timer.start()
 
     def refresh_preview(self, *_: object) -> None:
         if self._updating_ui:
@@ -916,38 +691,45 @@ class MainWindow(QMainWindow):
             bundle = self._backend.preview(state)
             self._last_bundle = bundle
             self.issue_list.set_issues(bundle.issues)
-            self.output_panel.set_scripts(
-                bundle.commented_script,
-                bundle.minimal_script,
-                "\n".join(bundle.summary_lines),
-                bundle.can_generate,
-            )
+            self.preview_chart.set_bundle(bundle)
+            self.output_panel.set_scripts(bundle.commented_script, bundle.minimal_script, "\n".join(bundle.summary_lines), bundle.can_generate)
             self._update_current_preview(state)
             self._refresh_workstep_metrics(bundle)
+            self.planning_card.setVisible(
+                isinstance(bundle, SequenceScriptBundle)
+                and bundle.lost_checkpoint_count > 0
+                and self.mode_combo.currentData() == WorkspaceMode.SEQUENCE.value
+            )
             self._update_status_bar(bundle)
-        except Exception as exc:  # pragma: no cover - protective UI path
+        except Exception as exc:  # pragma: no cover
             issue = ValidationIssue(severity=Severity.ERROR, code="ui.refresh", message=str(exc))
             self._last_bundle = None
             self.issue_list.set_issues([issue])
+            self.preview_chart.set_bundle(None)
             self.output_panel.set_scripts("", "", str(exc), False)
             self._refresh_workstep_metrics()
-            self.statusBar().showMessage(f"预览失败: {exc}")
+            self.statusBar().showMessage(f"预览失败：{exc}")
 
     def _update_current_preview(self, state: GuiState) -> None:
         try:
             one_c_current_a, operating_current_a, operating_rate_c = self._backend.resolve_current_preview(state)
         except Exception:
+            self.current_basis_value.setText("-")
             self.current_operating_value.setText("-")
             self.current_preview_label.setText("-")
             return
-        summary = f"{operating_current_a:.9f} A  |  {operating_rate_c:g} C  |  1C = {one_c_current_a:.9f} A"
-        self.current_operating_value.setText(summary)
-        self.current_preview_label.setText(summary)
+        basis_text = "参考基准" if state.current_basis_mode is CurrentBasisUiMode.REFERENCE else "材料基准"
+        self.current_basis_value.setText(f"{basis_text} | 1C = {one_c_current_a:.9f} A")
+        self.current_operating_value.setText(f"{operating_current_a:.9f} A | {operating_rate_c:g} C")
+        self.current_preview_label.setText(f"{operating_current_a:.9f} A | {operating_rate_c:g} C | 1C = {one_c_current_a:.9f} A")
 
     def _update_status_bar(self, bundle: ScriptBundle) -> None:
         error_count = sum(1 for issue in bundle.issues if issue.severity is Severity.ERROR)
         warning_count = sum(1 for issue in bundle.issues if issue.severity is Severity.WARNING)
-        self.statusBar().showMessage(f"错误 {error_count}  |  警告 {warning_count}")
+        if isinstance(bundle, SequenceScriptBundle) and bundle.lost_checkpoint_count:
+            self.statusBar().showMessage(f"错误 {error_count} | 警告 {warning_count} | 丢点 {bundle.lost_checkpoint_count}")
+        else:
+            self.statusBar().showMessage(f"错误 {error_count} | 警告 {warning_count}")
 
     def _browse_export_directory(self) -> None:
         directory = QFileDialog.getExistingDirectory(self, "选择导出目录", self.export_dir_edit.text() or str(Path.cwd()))
@@ -959,28 +741,20 @@ class MainWindow(QMainWindow):
         self._apply_state(GuiState())
 
     def open_preset(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "打开预设",
-            str(self._current_preset_path.parent if self._current_preset_path else Path.cwd()),
-            "CHI Preset (*.chi-preset)",
-        )
+        base_dir = self._current_preset_path.parent if self._current_preset_path else Path.cwd()
+        path, _ = QFileDialog.getOpenFileName(self, "打开预设", str(base_dir), "CHI 预设 (*.chi-preset)")
         if path:
             self.load_preset_from_path(path)
 
     def save_preset(self) -> None:
         if self._current_preset_path is None:
             self.save_preset_as()
-            return
-        self.save_preset_to_path(self._current_preset_path)
+        else:
+            self.save_preset_to_path(self._current_preset_path)
 
     def save_preset_as(self) -> None:
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "保存预设",
-            str(self._current_preset_path or (Path.cwd() / "workflow.chi-preset")),
-            "CHI Preset (*.chi-preset)",
-        )
+        default_path = self._current_preset_path or (Path.cwd() / "workflow.chi-preset")
+        path, _ = QFileDialog.getSaveFileName(self, "保存预设", str(default_path), "CHI 预设 (*.chi-preset)")
         if path:
             self.save_preset_to_path(path)
 
@@ -996,12 +770,6 @@ class MainWindow(QMainWindow):
         self._update_recent_presets()
         self._apply_state(loaded_state)
 
-    def _save_preset_path(self, path: str | Path) -> Path:
-        return self.save_preset_to_path(path)
-
-    def _load_preset_path(self, path: str | Path) -> None:
-        self.load_preset_from_path(path)
-
     def _update_recent_presets(self) -> None:
         current_path = self.recent_presets_combo.currentData()
         self.recent_presets_combo.blockSignals(True)
@@ -1009,12 +777,8 @@ class MainWindow(QMainWindow):
         self.recent_presets_combo.addItem("最近预设", "")
         for path in self._preset_service.load_recent_files():
             self.recent_presets_combo.addItem(path.name, str(path))
-        if current_path:
-            index = self.recent_presets_combo.findData(current_path)
-            if index >= 0:
-                self.recent_presets_combo.setCurrentIndex(index)
-        else:
-            self.recent_presets_combo.setCurrentIndex(0)
+        index = self.recent_presets_combo.findData(current_path) if current_path else 0
+        self.recent_presets_combo.setCurrentIndex(index if index >= 0 else 0)
         self.recent_presets_combo.blockSignals(False)
 
     def _open_selected_recent_preset(self) -> None:

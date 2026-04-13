@@ -11,10 +11,23 @@ from .models import (
     ScriptKind,
     SequenceScriptBundle,
     TimeBasisMode,
-    TimePointPhase,
 )
 from .rendering import render_pulse_request, render_sequence_request, wrap_commented_script
 from .validation import validate_request, validate_sequence_request
+
+
+def _phase_kind_text(kind: PhaseKind) -> str:
+    return {
+        PhaseKind.TIME_POINTS: "时间取点",
+        PhaseKind.VOLTAGE_POINTS: "电压取点",
+        PhaseKind.REST: "静置工步",
+    }[kind]
+
+
+def _direction_text(direction: ProcessDirection | None) -> str:
+    if direction is None:
+        return "-"
+    return "充电" if direction is ProcessDirection.CHARGE else "放电"
 
 
 class ScriptGenerationService:
@@ -42,11 +55,15 @@ class ScriptGenerationService:
             minimal_script=minimal_script if validation.can_generate else "",
             issues=issues,
             one_c_current_a=summary.get("one_c_current_a"),
+            estimated_eis_duration_s=summary.get("estimated_eis_duration_s"),
             summary_lines=summary_lines,
             phase_plans=list(summary.get("phase_plans", [])),
             total_wall_clock_s=float(summary.get("total_wall_clock_s", 0.0)),
             total_point_count=int(summary.get("total_point_count", 0)),
             total_eis_count=int(summary.get("total_eis_count", 0)),
+            soc_trace=list(summary.get("soc_trace", [])),
+            soc_zero_time_s=summary.get("soc_zero_time_s"),
+            lost_checkpoint_count=int(summary.get("lost_checkpoint_count", 0)),
         )
 
     def _generate_pulse(self, request: ExperimentRequest) -> ScriptBundle:
@@ -61,6 +78,7 @@ class ScriptGenerationService:
             minimal_script="\n".join(minimal_lines) if validation.can_generate else "",
             issues=issues,
             one_c_current_a=summary.get("one_c_current_a"),
+            estimated_eis_duration_s=summary.get("estimated_eis_duration_s"),
             summary_lines=summary_lines,
         )
 
@@ -68,51 +86,66 @@ class ScriptGenerationService:
         phase_plans = list(summary.get("phase_plans", []))
         total_points = int(summary.get("total_point_count", 0))
         total_eis = int(summary.get("total_eis_count", 0))
+        lost_checkpoint_count = int(summary.get("lost_checkpoint_count", 0))
         lines = [
-            f"方案名称: {request.project.scheme_name}",
-            f"命名前缀: {request.project.file_prefix}",
-            f"导出目录: {request.project.export_dir}",
-            f"工步数: {len(request.phases)}",
-            f"总取点数: {total_points}",
-            f"总 EIS 次数: {total_eis}",
+            f"方案名称：{request.project.scheme_name}",
+            f"文件前缀：{request.project.file_prefix}",
+            f"导出目录：{request.project.export_dir}",
+            f"工步数量：{len(request.phases)}",
+            f"总取点数：{total_points}",
+            f"EIS 总数：{total_eis}",
+            f"单次 EIS 预估时长：{float(summary.get('estimated_eis_duration_s', 0.0)):.0f} s",
         ]
         if summary.get("one_c_current_a") is not None:
-            lines.append(f"1C 电流(A): {summary['one_c_current_a']:.9f}")
+            lines.append(f"1C 电流：{summary['one_c_current_a']:.9f} A")
+        if summary.get("soc_zero_time_s") is not None:
+            lines.append(f"SoC 预计归零时间：{float(summary['soc_zero_time_s']) / 60.0:.2f} min")
+        lines.append(f"SoC 耗尽后的丢点数：{lost_checkpoint_count}")
 
-        for phase_model, plan in zip(request.phases, phase_plans):
-            direction_text = "-" if plan.direction is None else ("充电" if plan.direction is ProcessDirection.CHARGE else "放电")
-            lines.append(f"{plan.phase_index}. {plan.label} | {plan.phase_kind.value} | {direction_text}")
+        for plan in phase_plans:
+            lines.append(f"{plan.phase_index}. {plan.label} | {_phase_kind_text(plan.phase_kind)} | {_direction_text(plan.direction)}")
             if plan.phase_kind is PhaseKind.TIME_POINTS:
-                assert isinstance(phase_model, TimePointPhase)
-                basis_text = "中断补偿" if phase_model.time_points.time_basis_mode is TimeBasisMode.INTERRUPTION_COMPENSATED else "有效进度累计"
-                lines.append(f"时间基准: {basis_text}")
-                lines.append(f"取点数: {plan.point_count}")
-                lines.append(f"EIS 次数: {plan.eis_count}")
-                lines.append("等效时间点(min): " + ", ".join(f"{value:g}" for value in plan.effective_points))
-                lines.append("脚本累计时间(min): " + ", ".join(f"{value:g}" for value in plan.rendered_points))
+                basis_text = {
+                    TimeBasisMode.ACTIVE_PROGRESS: "有效进度",
+                    TimeBasisMode.INTERRUPTION_COMPENSATED: "中断补偿",
+                    TimeBasisMode.CAPACITY_COMPENSATED: "等效容量补偿",
+                }.get(plan.time_basis_mode, "有效进度")
+                mode_text = {
+                    "fixed": "固定取点",
+                    "segmented": "分段取点",
+                    "manual": "手动列表",
+                }.get(plan.sampling_mode.value if plan.sampling_mode is not None else "segmented", "分段取点")
+                lines.append(
+                    f"  采样：{mode_text} | {basis_text} | {plan.point_count} 点 | {plan.eis_count} 次 EIS | {plan.wall_clock_total_s / 60.0:.1f} min"
+                )
                 if plan.compensation_offsets_min:
-                    lines.append("补偿偏移(min): " + ", ".join(f"{value:g}" for value in plan.compensation_offsets_min))
-                    lines.append(f"补偿总时长(s): {plan.compensation_offsets_min[-1] * 60.0:g}")
+                    label = "容量补偿偏移（min）" if plan.time_basis_mode is TimeBasisMode.CAPACITY_COMPENSATED else "补偿偏移（min）"
+                    lines.append(f"  {label}： " + ", ".join(f"{value:g}" for value in plan.compensation_offsets_min))
             elif plan.phase_kind is PhaseKind.VOLTAGE_POINTS:
-                lines.append(f"取点数: {plan.point_count}")
-                lines.append(f"EIS 次数: {plan.eis_count}")
-                lines.append("电压点(V): " + ", ".join(f"{value:.2f}".rstrip("0").rstrip(".") for value in plan.effective_points))
+                mode_text = {
+                    "linear": "范围生成",
+                    "manual": "手动列表",
+                }.get(plan.sampling_mode.value if plan.sampling_mode is not None else "linear", "范围生成")
+                lines.append(f"  采样：{mode_text} | {plan.point_count} 点 | {plan.eis_count} 次 EIS | {plan.wall_clock_total_s / 60.0:.1f} min")
             else:
-                lines.append(f"静置时长(s): {plan.wall_clock_total_s:g}")
-            lines.append(f"阶段预计墙钟时长(min): {plan.wall_clock_total_s / 60.0:.2f}".rstrip("0").rstrip("."))
+                lines.append(f"  静置：{plan.wall_clock_total_s:g} s")
+            if plan.lost_eis_marker_times_s:
+                lines.append("  丢失点位（min）： " + ", ".join(f"{value / 60.0:g}" for value in plan.lost_eis_marker_times_s))
 
-        lines.append(f"预计墙钟总时长(min): {(float(summary.get('total_wall_clock_s', 0.0)) / 60.0):.2f}".rstrip("0").rstrip("."))
+        lines.append(f"总历时：{float(summary.get('total_wall_clock_s', 0.0)) / 60.0:.2f} min")
         return lines
 
     def _build_pulse_summary_lines(self, request: ExperimentRequest, summary: dict[str, object]) -> list[str]:
         lines = [
-            f"方案名称: {request.project.scheme_name}",
-            f"命名前缀: {request.project.file_prefix}",
-            f"导出目录: {request.project.export_dir}",
-            f"脉冲次数: {summary.get('pulse_count', 0)}",
+            f"方案名称：{request.project.scheme_name}",
+            f"文件前缀：{request.project.file_prefix}",
+            f"导出目录：{request.project.export_dir}",
+            f"脉冲次数：{summary.get('pulse_count', 0)}",
         ]
         if summary.get("one_c_current_a") is not None:
-            lines.append(f"1C 电流(A): {summary['one_c_current_a']:.9f}")
+            lines.append(f"1C 电流：{summary['one_c_current_a']:.9f} A")
+        if summary.get("estimated_eis_duration_s") is not None:
+            lines.append(f"单次 EIS 预估时长：{float(summary['estimated_eis_duration_s']):.0f} s")
         return lines
 
 

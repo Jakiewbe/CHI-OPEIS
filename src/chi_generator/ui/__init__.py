@@ -1,4 +1,4 @@
-"""PyQt6 user interface package."""
+"""PySide6 user interface package."""
 
 from .models import GuiState
 

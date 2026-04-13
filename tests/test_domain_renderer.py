@@ -71,6 +71,7 @@ def test_fixed_voltage_renders_cp_with_explicit_reset_params() -> None:
     assert result.can_generate is True
     assert "tech=cp" in result.script
     assert "ia=0" in result.script
+    assert "eh=3\nel=2.7" in result.script
     assert "ta=0.05" in result.script
     assert "cl=1" in result.script
     assert "prioe" in result.script

@@ -87,8 +87,36 @@ def test_voltage_range_generation_expands_points_and_renders_cp_blocks() -> None
     assert bundle.total_eis_count == 4
     assert bundle.one_c_current_a == pytest.approx(0.000865)
     assert bundle.phase_plans[0].effective_points == pytest.approx([3.2, 3.1, 3.0])
+    assert "eh=3.2\nel=3.2" in bundle.minimal_script
+    assert "eh=3.2\nel=3.1" in bundle.minimal_script
+    assert "tc=100000" in bundle.minimal_script
+    assert "pn=n" in bundle.minimal_script
     assert "save=DEMO_S01_CC_3.20V" in bundle.minimal_script
     assert "save=DEMO_S01_EIS_3.00V" in bundle.minimal_script
+
+
+def test_charge_voltage_range_renders_target_as_cp_upper_limit() -> None:
+    bundle = ScriptGenerationService().generate(
+        _base_sequence_request(
+            [
+                VoltagePointPhase(
+                    label="Charge voltage",
+                    direction=ProcessDirection.CHARGE,
+                    current_setpoint=_rate_setpoint(0.1),
+                    voltage_window=_voltage_window(),
+                    sampling=SamplingConfig(pre_wait_s=0.0, sample_interval_s=0.001),
+                    voltage_points=VoltagePointConfig(start_v=1.8, end_v=3.0, step_v=0.6),
+                )
+            ]
+        )
+    )
+
+    assert bundle.can_generate is True
+    assert bundle.phase_plans[0].effective_points == pytest.approx([1.8, 2.4, 3.0])
+    assert "ic=-0.0000865" in bundle.minimal_script
+    assert "eh=1.8\nel=1.5" in bundle.minimal_script
+    assert "eh=2.4\nel=1.5" in bundle.minimal_script
+    assert "eh=3\nel=1.5" in bundle.minimal_script
 
 
 def test_time_segments_generate_expected_points_and_counts() -> None:
@@ -192,7 +220,35 @@ def test_compensation_only_affects_current_time_step() -> None:
     assert bundle.phase_plans[0].effective_points == pytest.approx([3.333333, 6.666667, 10.0])
     assert bundle.phase_plans[0].rendered_points == pytest.approx([3.333333, 8.666667, 14.0])
     assert bundle.phase_plans[1].rendered_points == pytest.approx([5.0, 10.0])
-    assert "补偿偏移(min): 0, 2, 4" in "\n".join(bundle.summary_lines)
+    assert "补偿偏移（min）： 0, 2, 4" in "\n".join(bundle.summary_lines)
+
+
+def test_ctc_compensation_reduces_current_hold_to_preserve_equivalent_capacity() -> None:
+    bundle = ScriptGenerationService().generate(
+        _base_sequence_request(
+            [
+                TimePointPhase(
+                    label="CTC",
+                    direction=ProcessDirection.DISCHARGE,
+                    current_setpoint=_rate_setpoint(0.1),
+                    voltage_window=_voltage_window(),
+                    sampling=SamplingConfig(pre_wait_s=0.0, sample_interval_s=0.001),
+                    time_points=TimePointConfig(
+                        mode="manual",
+                        manual_points_minutes=[60],
+                        time_basis_mode=TimeBasisMode.CAPACITY_COMPENSATED,
+                        manual_eis_duration_s=1200,
+                    ),
+                )
+            ]
+        )
+    )
+
+    assert bundle.can_generate is True
+    assert bundle.phase_plans[0].effective_points == pytest.approx([60.0])
+    assert bundle.phase_plans[0].rendered_points == pytest.approx([40.0])
+    assert "st1=2400" in bundle.minimal_script
+    assert "容量补偿偏移（min）： -20" in "\n".join(bundle.summary_lines)
 
 
 def test_charge_voltage_range_requires_ascending_directional_range() -> None:

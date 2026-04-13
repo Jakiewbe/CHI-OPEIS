@@ -43,6 +43,12 @@ class ScriptRenderer:
         discharge_high = scenario.cp_high_voltage_v or battery.ocv_voltage_v
         for index, target_voltage in enumerate(scenario.target_voltages_v, start=1):
             discharge_name = self._save_name(base.save_prefix, "cp", f"d{index:03d}")
+            upper_v, lower_v = self._cp_limits(
+                current_a=battery.discharge_current_a,
+                target_v=target_voltage,
+                high_v=discharge_high,
+                low_v=battery.cutoff_voltage_v,
+            )
             steps.append(
                 RenderedStep(
                     filename=discharge_name,
@@ -50,8 +56,8 @@ class ScriptRenderer:
                         "tech=cp",
                         f"ic={_fmt(battery.discharge_current_a)}",
                         f"ia={_fmt(scenario.cp_reverse_current_a)}",
-                        f"eh={_fmt(discharge_high)}",
-                        f"el={_fmt(target_voltage)}",
+                        f"eh={_fmt(upper_v)}",
+                        f"el={_fmt(lower_v)}",
                         f"tc={_fmt(scenario.cp_cathodic_time_s)}",
                         f"ta={_fmt(scenario.cp_hold_seconds)}",
                         "pn=n",
@@ -176,3 +182,9 @@ class ScriptRenderer:
     @staticmethod
     def _format_minutes(value: float) -> str:
         return _fmt(value).replace(".", "_")
+
+    @staticmethod
+    def _cp_limits(*, current_a: float, target_v: float, high_v: float, low_v: float) -> tuple[float, float]:
+        if current_a < 0:
+            return target_v, low_v
+        return high_v, target_v

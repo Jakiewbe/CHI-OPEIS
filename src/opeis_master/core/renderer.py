@@ -28,13 +28,19 @@ class ScriptRenderer:
         for point in request.fixed_voltage.target_points:
             if request.fixed_voltage.settle_seconds > 0:
                 lines.append(f"delay={request.fixed_voltage.settle_seconds:g}")
+            upper_v, lower_v = self._cp_limits(
+                current_a=request.fixed_voltage.discharge_current_a,
+                target_v=point,
+                high_v=request.battery.upper_limit_v,
+                low_v=request.battery.lower_limit_v,
+            )
             lines.extend(
                 [
                     "tech=cp",
                     f"ic={request.fixed_voltage.discharge_current_a:g}",
                     "ia=0",
-                    f"eh={request.battery.upper_limit_v:g}",
-                    f"el={point:g}",
+                    f"eh={upper_v:g}",
+                    f"el={lower_v:g}",
                     "tc=86400",
                     "ta=0.05",
                     f"si={request.fixed_voltage.sample_interval_s:g}",
@@ -171,3 +177,9 @@ class ScriptRenderer:
     @staticmethod
     def _voltage_label(value: float) -> str:
         return f"{value:.2f}V"
+
+    @staticmethod
+    def _cp_limits(*, current_a: float, target_v: float, high_v: float, low_v: float) -> tuple[float, float]:
+        if current_a < 0:
+            return target_v, low_v
+        return high_v, target_v

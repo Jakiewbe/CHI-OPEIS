@@ -1,6 +1,6 @@
 # 辰华原位阻抗脚本生成终端
 
-本项目是一个本地 `PyQt6` 桌面应用，用于把 CHI 原位阻抗实验参数整理成可直接复制到 `CHI Macro Command` 的纯命令脚本。
+本项目是一个本地 `PySide6` 桌面应用，用于把 CHI 原位阻抗实验参数整理成可直接复制到 `CHI Macro Command` 的纯命令脚本。
 
 当前版本重点解决三类问题：
 
@@ -22,7 +22,8 @@
 ## 技术栈
 
 - Python 3.11+
-- PyQt6
+- PySide6
+- PySide6-Fluent-Widgets
 - pydantic
 - pytest
 - PyInstaller
@@ -66,7 +67,7 @@ dist/CHI-OPEIS/
 
 ```text
 src/chi_generator/domain/    领域模型、校验、渲染、脚本生成
-src/chi_generator/ui/        PyQt6 界面与 GUI -> Domain 适配
+src/chi_generator/ui/        PySide6 / Fluent 界面与 GUI -> Domain 适配
 src/chi_generator/app.py     应用装配入口
 src/opeis_master/            兼容层与旧导入路径
 tests/                       GUI、domain、兼容合同测试

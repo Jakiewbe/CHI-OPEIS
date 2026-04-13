@@ -22,8 +22,9 @@ from chi_generator.domain.models import (
     RelaxationMode,
     RestPhase,
     SamplingConfig,
+    SamplingMode,
     ScriptKind,
-    TimeBasisMode,
+    SpacingMode,
     TimePointConfig,
     TimePointPhase,
     TimeSegmentConfig,
@@ -33,8 +34,21 @@ from chi_generator.domain.models import (
 )
 from chi_generator.domain.service import ScriptGenerationService
 
-from .models import CurrentInputUiMode, GuiPhaseState, GuiState, PhaseUiKind, RelaxationUiMode, WorkspaceMode
+from .models import (
+    CurrentBasisUiMode,
+    CurrentInputUiMode,
+    FixedTimeUiMode,
+    GuiPhaseState,
+    GuiState,
+    GuiValidatedPhase,
+    GuiValidatedState,
+    PhaseUiKind,
+    RelaxationUiMode,
+    VoltageInputUiMode,
+    WorkspaceMode,
+)
 from .parsers import parse_float, parse_int
+from .planning import parse_float_list
 
 
 @dataclass(slots=True)
@@ -46,15 +60,14 @@ class GuiBackend:
             self.service = ScriptGenerationService()
 
     def preview(self, state: GuiState):
-        return self.service.generate(self._build_request(state))
+        validated = self._validate_state(state)
+        return self.service.generate(self._build_request(validated))
 
     def resolve_current_preview(self, state: GuiState, phase_index: int = 0) -> tuple[float, float, float]:
-        battery = BatteryConfig(
-            active_material_mg=parse_float(state.active_material_mg, field_label="active material mass"),
-            theoretical_capacity_mah_mg=parse_float(state.theoretical_capacity_mah_mg, field_label="theoretical specific capacity"),
-        )
-        current_basis = CurrentBasisConfig(mode=CurrentBasisMode.MATERIAL)
-        controlled = [phase for phase in state.phases if phase.phase_kind is not PhaseUiKind.REST]
+        validated = self._validate_state(state)
+        battery = self._build_battery(validated.draft)
+        current_basis = self._build_current_basis(validated.draft)
+        controlled = [phase.phase for phase in validated.phases if phase.phase.phase_kind is not PhaseUiKind.REST]
         if controlled:
             phase = controlled[min(max(phase_index, 0), len(controlled) - 1)]
             setpoint = self._build_current_setpoint(phase.current_mode, phase.rate_c, phase.current_a)
@@ -63,49 +76,74 @@ class GuiBackend:
         resolution = resolve_current(battery, current_basis, setpoint)
         return resolution.one_c_current_a, resolution.operating_current_a, resolution.operating_rate_c
 
-    def _build_request(self, state: GuiState):
-        if state.workspace_mode is WorkspaceMode.PULSE:
-            return self._build_pulse_request(state)
-        return self._build_sequence_request(state)
+    def _validate_state(self, state: GuiState) -> GuiValidatedState:
+        return GuiValidatedState(
+            draft=state,
+            phases=[GuiValidatedPhase(phase=phase) for phase in state.phases],
+        )
 
-    def _build_sequence_request(self, state: GuiState) -> ExperimentSequenceRequest:
+    def _build_request(self, validated: GuiValidatedState):
+        if validated.draft.workspace_mode is WorkspaceMode.PULSE:
+            return self._build_pulse_request(validated)
+        return self._build_sequence_request(validated)
+
+    def _build_project(self, state: GuiState) -> ProjectConfig:
+        return ProjectConfig(
+            scheme_name=state.scheme_name,
+            file_prefix=state.file_prefix,
+            export_dir=Path(state.export_dir or ".").resolve(),
+        )
+
+    def _build_battery(self, state: GuiState) -> BatteryConfig:
+        return BatteryConfig(
+            active_material_mg=parse_float(state.active_material_mg, field_label="活性物质量"),
+            theoretical_capacity_mah_mg=parse_float(state.theoretical_capacity_mah_mg, field_label="理论比容量"),
+        )
+
+    def _build_current_basis(self, state: GuiState) -> CurrentBasisConfig:
+        if state.current_basis_mode is CurrentBasisUiMode.REFERENCE:
+            return CurrentBasisConfig(
+                mode=CurrentBasisMode.REFERENCE,
+                reference_rate_c=parse_float(state.reference_rate_c, field_label="参考倍率"),
+                reference_current_a=parse_float(state.reference_current_a, field_label="参考电流"),
+            )
+        return CurrentBasisConfig(mode=CurrentBasisMode.MATERIAL)
+
+    def _build_impedance_defaults(self, state: GuiState) -> ImpedanceConfig:
+        return ImpedanceConfig(
+            use_open_circuit_init_e=state.use_open_circuit_init_e,
+            init_e_v=None if state.use_open_circuit_init_e else parse_float(state.init_e_v, field_label="初始电位"),
+            high_frequency_hz=parse_float(state.high_frequency_hz, field_label="高频"),
+            low_frequency_hz=parse_float(state.low_frequency_hz, field_label="低频"),
+            amplitude_v=parse_float(state.amplitude_v, field_label="电压振幅"),
+            quiet_time_s=parse_float(state.quiet_time_s, field_label="静置时间"),
+        )
+
+    def _build_sequence_request(self, validated: GuiValidatedState) -> ExperimentSequenceRequest:
+        state = validated.draft
         return ExperimentSequenceRequest(
-            project=ProjectConfig(
-                scheme_name=state.scheme_name,
-                file_prefix=state.file_prefix,
-                export_dir=Path(state.export_dir or ".").resolve(),
-            ),
-            battery=BatteryConfig(
-                active_material_mg=parse_float(state.active_material_mg, field_label="active material mass"),
-                theoretical_capacity_mah_mg=parse_float(state.theoretical_capacity_mah_mg, field_label="theoretical specific capacity"),
-            ),
-            current_basis=CurrentBasisConfig(mode=CurrentBasisMode.MATERIAL),
-            impedance_defaults=ImpedanceConfig(
-                use_open_circuit_init_e=state.use_open_circuit_init_e,
-                init_e_v=None if state.use_open_circuit_init_e else parse_float(state.init_e_v, field_label="Init E"),
-                high_frequency_hz=parse_float(state.high_frequency_hz, field_label="fh"),
-                low_frequency_hz=parse_float(state.low_frequency_hz, field_label="fl"),
-                amplitude_v=parse_float(state.amplitude_v, field_label="amplitude"),
-                quiet_time_s=parse_float(state.quiet_time_s, field_label="quiet time"),
-            ),
-            phases=[self._build_phase(phase_state) for phase_state in state.phases],
+            project=self._build_project(state),
+            battery=self._build_battery(state),
+            current_basis=self._build_current_basis(state),
+            impedance_defaults=self._build_impedance_defaults(state),
+            phases=[self._build_phase(phase.phase) for phase in validated.phases],
         )
 
     def _build_phase(self, state: GuiPhaseState):
         if state.phase_kind is PhaseUiKind.REST:
-            return RestPhase(label=state.label, duration_s=parse_float(state.rest_duration_s, field_label="rest duration"))
+            return RestPhase(label=state.label, duration_s=parse_float(state.rest_duration_s, field_label="静置时长"))
 
         payload = {
             "label": state.label,
             "direction": ProcessDirection(state.direction),
             "current_setpoint": self._build_current_setpoint(state.current_mode, state.rate_c, state.current_a),
             "voltage_window": VoltageWindowConfig(
-                upper_v=parse_float(state.upper_voltage_v, field_label="upper voltage"),
-                lower_v=parse_float(state.lower_voltage_v, field_label="lower voltage"),
+                upper_v=parse_float(state.upper_voltage_v, field_label="上限电压"),
+                lower_v=parse_float(state.lower_voltage_v, field_label="下限电压"),
             ),
             "sampling": SamplingConfig(
-                pre_wait_s=parse_float(state.pre_wait_s, field_label="pre-wait"),
-                sample_interval_s=parse_float(state.sample_interval_s, field_label="sample interval"),
+                pre_wait_s=parse_float(state.pre_wait_s, field_label="点前等待"),
+                sample_interval_s=parse_float(state.sample_interval_s, field_label="采样间隔"),
             ),
             "insert_eis_after_each_point": state.insert_eis_after_each_point,
         }
@@ -117,65 +155,64 @@ class GuiBackend:
 
     def _build_current_setpoint(self, mode: CurrentInputUiMode, rate_text: str, current_text: str) -> CurrentSetpointConfig:
         if mode is CurrentInputUiMode.ABSOLUTE:
-            return CurrentSetpointConfig(mode=CurrentInputMode.ABSOLUTE, current_a=parse_float(current_text, field_label="current"))
-        return CurrentSetpointConfig(mode=CurrentInputMode.RATE, rate_c=parse_float(rate_text, field_label="rate"))
+            return CurrentSetpointConfig(mode=CurrentInputMode.ABSOLUTE, current_a=parse_float(current_text, field_label="电流"))
+        return CurrentSetpointConfig(mode=CurrentInputMode.RATE, rate_c=parse_float(rate_text, field_label="倍率"))
 
     def _build_voltage_points(self, state: GuiPhaseState) -> VoltagePointConfig:
+        spacing_mode = SpacingMode.MANUAL if state.voltage_input_mode is VoltageInputUiMode.MANUAL else SpacingMode.LINEAR
         return VoltagePointConfig(
-            start_v=parse_float(state.voltage_start_v, field_label="voltage start"),
-            end_v=parse_float(state.voltage_end_v, field_label="voltage end"),
-            step_v=parse_float(state.voltage_step_v, field_label="voltage step"),
+            start_v=parse_float(state.voltage_start_v, field_label="起始电压"),
+            end_v=parse_float(state.voltage_end_v, field_label="结束电压"),
+            step_v=parse_float(state.voltage_step_v, field_label="电压步长"),
+            spacing_mode=spacing_mode,
+            manual_points_v=parse_float_list(state.voltage_manual_points_text),
         )
 
     def _build_time_points(self, state: GuiPhaseState) -> TimePointConfig:
-        time_basis_mode = TimeBasisMode(state.time_basis_mode)
         manual_eis_duration_s = None
-        if time_basis_mode is TimeBasisMode.INTERRUPTION_COMPENSATED:
-            manual_eis_duration_s = parse_float(state.manual_eis_duration_s, field_label="manual EIS duration")
-        return TimePointConfig(
-            early=TimeSegmentConfig(
-                duration_minutes=parse_float(state.early_duration_min, field_label="early duration"),
-                point_count=parse_int(state.early_point_count, field_label="early point count"),
-            ),
-            plateau=TimeSegmentConfig(
-                duration_minutes=parse_float(state.plateau_duration_min, field_label="plateau duration"),
-                point_count=parse_int(state.plateau_point_count, field_label="plateau point count"),
-            ),
-            late=TimeSegmentConfig(
-                duration_minutes=parse_float(state.late_duration_min, field_label="late duration"),
-                point_count=parse_int(state.late_point_count, field_label="late point count"),
-            ),
-            time_basis_mode=time_basis_mode,
-            manual_eis_duration_s=manual_eis_duration_s,
-        )
+        if state.manual_eis_duration_s.strip() and float(state.manual_eis_duration_s) > 0:
+            manual_eis_duration_s = parse_float(state.manual_eis_duration_s, field_label="EIS 时长覆盖")
 
-    def _build_pulse_request(self, state: GuiState) -> ExperimentRequest:
+        sampling_mode = SamplingMode(state.sampling_mode)
+        segments = [
+            TimeSegmentConfig(
+                duration_minutes=parse_float(segment.duration_min, field_label="分段时长"),
+                point_count=parse_int(segment.point_count, field_label="分段点数"),
+            )
+            for segment in state.segmented_points
+        ]
+        payload: dict[str, object] = {
+            "mode": sampling_mode,
+            "time_basis_mode": state.time_basis_mode,
+            "manual_eis_duration_s": manual_eis_duration_s,
+            "estimated_eis_duration_s": None,
+        }
+        if sampling_mode is SamplingMode.MANUAL:
+            payload["manual_points_minutes"] = parse_float_list(state.manual_points_text)
+        elif sampling_mode is SamplingMode.FIXED:
+            payload["total_duration_minutes"] = parse_float(state.fixed_total_duration_min, field_label="总时长")
+            if state.fixed_mode is FixedTimeUiMode.INTERVAL:
+                payload["fixed_interval_minutes"] = parse_float(state.fixed_interval_min, field_label="固定间隔")
+            else:
+                payload["fixed_point_count"] = parse_int(state.fixed_point_count, field_label="固定点数")
+        else:
+            payload["segments"] = segments
+        return TimePointConfig.model_validate(payload)
+
+    def _build_pulse_request(self, validated: GuiValidatedState) -> ExperimentRequest:
+        state = validated.draft
         request = ExperimentRequest(
             kind=ScriptKind.PULSE,
-            project=ProjectConfig(
-                scheme_name=state.scheme_name,
-                file_prefix=state.file_prefix,
-                export_dir=Path(state.export_dir or ".").resolve(),
-            ),
-            battery=BatteryConfig(
-                active_material_mg=parse_float(state.active_material_mg, field_label="active material mass"),
-                theoretical_capacity_mah_mg=parse_float(state.theoretical_capacity_mah_mg, field_label="theoretical specific capacity"),
-            ),
-            current_basis=CurrentBasisConfig(mode=CurrentBasisMode.MATERIAL),
+            project=self._build_project(state),
+            battery=self._build_battery(state),
+            current_basis=self._build_current_basis(state),
             discharge_current=CurrentSetpointConfig(mode=CurrentInputMode.RATE, rate_c=0.1),
             voltage_window=VoltageWindowConfig(
-                upper_v=parse_float(state.pulse_upper_voltage_v, field_label="pulse upper voltage"),
-                lower_v=parse_float(state.pulse_lower_voltage_v, field_label="pulse lower voltage"),
+                upper_v=parse_float(state.pulse_upper_voltage_v, field_label="脉冲上限电压"),
+                lower_v=parse_float(state.pulse_lower_voltage_v, field_label="脉冲下限电压"),
             ),
-            sampling=SamplingConfig(pre_wait_s=parse_float(state.pulse_pre_wait_s, field_label="pulse pre-wait"), sample_interval_s=0.001),
-            impedance=ImpedanceConfig(
-                use_open_circuit_init_e=state.use_open_circuit_init_e,
-                init_e_v=None if state.use_open_circuit_init_e else parse_float(state.init_e_v, field_label="Init E"),
-                high_frequency_hz=parse_float(state.high_frequency_hz, field_label="fh"),
-                low_frequency_hz=parse_float(state.low_frequency_hz, field_label="fl"),
-                amplitude_v=parse_float(state.amplitude_v, field_label="amplitude"),
-                quiet_time_s=parse_float(state.quiet_time_s, field_label="quiet time"),
-            ),
+            sampling=SamplingConfig(pre_wait_s=parse_float(state.pulse_pre_wait_s, field_label="点前等待"), sample_interval_s=0.001),
+            impedance=self._build_impedance_defaults(state),
         )
         relaxation_current = None
         if state.pulse_relaxation_mode is RelaxationUiMode.CONSTANT_CURRENT:
@@ -186,19 +223,19 @@ class GuiBackend:
             )
         request.pulse = PulseConfig(
             relaxation_mode=RelaxationMode(state.pulse_relaxation_mode.value),
-            relaxation_time_s=parse_float(state.pulse_relaxation_time_s, field_label="relaxation time"),
+            relaxation_time_s=parse_float(state.pulse_relaxation_time_s, field_label="弛豫时间"),
             relaxation_current=relaxation_current,
             pulse_current=self._build_pulse_current(state.pulse_current_mode, state.pulse_current_rate_c, state.pulse_current_a),
-            pulse_duration_s=parse_float(state.pulse_duration_s, field_label="pulse duration"),
-            pulse_count=parse_int(state.pulse_count, field_label="pulse count"),
-            sample_interval_s=parse_float(state.pulse_sample_interval_s, field_label="pulse sample interval"),
+            pulse_duration_s=parse_float(state.pulse_duration_s, field_label="脉冲时长"),
+            pulse_count=parse_int(state.pulse_count, field_label="脉冲次数"),
+            sample_interval_s=parse_float(state.pulse_sample_interval_s, field_label="脉冲采样间隔"),
         )
         return request
 
     def _build_pulse_current(self, mode: CurrentInputUiMode, rate_text: str, current_text: str) -> PulseCurrentConfig:
         if mode is CurrentInputUiMode.ABSOLUTE:
-            return PulseCurrentConfig(mode=CurrentInputMode.ABSOLUTE, current_a=parse_float(current_text, field_label="pulse current"))
-        return PulseCurrentConfig(mode=CurrentInputMode.RATE, rate_c=parse_float(rate_text, field_label="pulse rate"))
+            return PulseCurrentConfig(mode=CurrentInputMode.ABSOLUTE, current_a=parse_float(current_text, field_label="脉冲电流"))
+        return PulseCurrentConfig(mode=CurrentInputMode.RATE, rate_c=parse_float(rate_text, field_label="脉冲倍率"))
 
 
 __all__ = ["GuiBackend"]

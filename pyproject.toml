@@ -9,7 +9,8 @@ description = "Local desktop GUI application generator for CHI in-situ EIS scrip
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-  "PyQt6>=6.8,<7",
+  "PySide6>=6.11,<7",
+  "PySide6-Fluent-Widgets>=1.11,<2",
   "pydantic>=2.8,<3",
 ]
 

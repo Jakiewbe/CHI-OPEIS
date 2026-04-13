@@ -12,7 +12,7 @@ def _force_offscreen_qt() -> None:
 
 @pytest.fixture(autouse=True)
 def _compat_manual_refresh(monkeypatch) -> None:
-    from PyQt6.QtWidgets import QLineEdit
+    from PySide6.QtWidgets import QLineEdit
     from chi_generator.ui.main_window import MainWindow
 
     if not hasattr(MainWindow, "_manual_refresh"):
@@ -28,9 +28,9 @@ def _compat_manual_refresh(monkeypatch) -> None:
 
 @pytest.fixture(scope="session")
 def qt_app():
-    pytest.importorskip("PyQt6")
+    pytest.importorskip("PySide6")
 
-    from PyQt6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication
 
     app = QApplication.instance() or QApplication([])
     yield app

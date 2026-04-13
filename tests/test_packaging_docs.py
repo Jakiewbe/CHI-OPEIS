@@ -7,7 +7,7 @@ def test_packaging_notes_cover_blank_pc_runtime_and_build_dependencies() -> None
     text = Path("docs/packaging.md").read_text(encoding="utf-8")
 
     assert "Python 3.11" in text
-    assert "PyQt6" in text
+    assert "PySide6" in text
     assert "pydantic" in text
     assert "pytest" in text
     assert "pytest-qt" in text

@@ -36,3 +36,21 @@ def test_fixed_voltage_range_expands_for_charge() -> None:
     )
 
     assert points == [2.6, 2.7, 2.8, 2.9, 3.0, 3.1, 3.2]
+
+
+def test_non_divisible_voltage_range_still_includes_end_point() -> None:
+    points = expand_voltage_range(
+        VoltagePointConfig(start_v=3.2, end_v=2.55, step_v=0.1),
+        ProcessDirection.DISCHARGE,
+    )
+
+    assert points == [3.2, 3.1, 3.0, 2.9, 2.8, 2.7, 2.6, 2.55]
+
+
+def test_manual_voltage_points_accept_descending_discharge_order() -> None:
+    points = expand_voltage_range(
+        VoltagePointConfig(spacing_mode="manual", manual_points_v=[3.2, 3.0, 2.75, 2.5]),
+        ProcessDirection.DISCHARGE,
+    )
+
+    assert points == [3.2, 3.0, 2.75, 2.5]

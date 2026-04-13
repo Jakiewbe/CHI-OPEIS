@@ -218,13 +218,19 @@ class ScriptGenerationService:
 
         elif request.scenario is ScriptScenario.FIXED_VOLTAGE:
             for target in request.fixed_voltage.target_points:
+                upper_v, lower_v = self._cp_limits(
+                    current_a=request.fixed_voltage.discharge_current_a,
+                    target_v=target,
+                    high_v=request.battery.ocv_v,
+                    low_v=request.battery.lower_limit_v,
+                )
                 lines.extend(
                     [
                         "tech=cp",
                         f"ic={self._fmt(request.fixed_voltage.discharge_current_a)}",
                         "ia=0",
-                        f"eh={self._fmt(request.battery.ocv_v)}",
-                        f"el={self._fmt(target)}",
+                        f"eh={self._fmt(upper_v)}",
+                        f"el={self._fmt(lower_v)}",
                         "ta=0.05",
                         f"si={self._fmt(request.fixed_voltage.sample_interval_s)}",
                         "cl=1",
@@ -329,6 +335,12 @@ class ScriptGenerationService:
     def _fmt(value: float) -> str:
         text = f"{value:g}"
         return text
+
+    @staticmethod
+    def _cp_limits(*, current_a: float, target_v: float, high_v: float, low_v: float) -> tuple[float, float]:
+        if current_a < 0:
+            return target_v, low_v
+        return high_v, target_v
 
 
 __all__ = ["ScriptGenerationService"]

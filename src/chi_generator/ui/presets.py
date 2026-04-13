@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
-from .models import GuiState, SequencePresetDocument
+from .models import GuiDraftState, SequencePresetDocument
 
 
 class PresetFileService:
@@ -18,7 +19,7 @@ class PresetFileService:
             path = path.with_suffix(".chi-preset")
         return path
 
-    def save_preset(self, path: str | Path, state: GuiState) -> Path:
+    def save_preset(self, path: str | Path, state: GuiDraftState) -> Path:
         resolved = self.normalize_preset_path(path)
         resolved.parent.mkdir(parents=True, exist_ok=True)
         document = SequencePresetDocument(workspace_mode=state.workspace_mode, state=state)
@@ -26,9 +27,11 @@ class PresetFileService:
         self.record_recent_file(resolved)
         return resolved
 
-    def load_preset(self, path: str | Path) -> GuiState:
+    def load_preset(self, path: str | Path) -> GuiDraftState:
         resolved = Path(path).expanduser().resolve()
-        document = SequencePresetDocument.model_validate_json(resolved.read_text(encoding="utf-8"))
+        payload = json.loads(resolved.read_text(encoding="utf-8"))
+        migrated = self._migrate_payload(payload)
+        document = SequencePresetDocument.model_validate(migrated)
         self.record_recent_file(resolved)
         return document.state
 
@@ -56,6 +59,22 @@ class PresetFileService:
             json.dumps({"recent_files": [str(item) for item in trimmed]}, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+
+    def _migrate_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        migrated = dict(payload)
+        version = int(migrated.get("version", 1))
+        state = migrated.get("state")
+        if not isinstance(state, dict):
+            return migrated
+
+        state = dict(state)
+        if version < 4:
+            state.setdefault("current_basis_mode", "material")
+            state.setdefault("reference_rate_c", "1")
+            state.setdefault("reference_current_a", "0.000865")
+        migrated["state"] = state
+        migrated["version"] = 4
+        return migrated
 
 
 __all__ = ["PresetFileService"]

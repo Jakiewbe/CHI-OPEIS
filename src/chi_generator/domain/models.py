@@ -18,10 +18,24 @@ class DomainModel(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, use_enum_values=False)
 
 
+class SuggestedPlan(DomainModel):
+    point_count: int
+    label: str
+    points: list[float]
+    priority: float = 0.0
+
+
 class Severity(StrEnum):
     ERROR = "error"
     WARNING = "warning"
     INFO = "info"
+
+
+class RiskLevel(StrEnum):
+    BLOCKING = "blocking"
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
 
 
 IssueSeverity = Severity
@@ -48,6 +62,18 @@ class ProcessDirection(StrEnum):
 class TimeBasisMode(StrEnum):
     ACTIVE_PROGRESS = "active_progress"
     INTERRUPTION_COMPENSATED = "interruption_compensated"
+    CAPACITY_COMPENSATED = "capacity_compensated"
+
+
+class SpacingMode(StrEnum):
+    LINEAR = "linear"
+    LOG = "log"
+    SQRT = "sqrt"
+    MANUAL = "manual"
+
+
+class ImpedanceMode(StrEnum):
+    POTENTIOSTATIC = "potentiostatic"
 
 
 class PlanningStrategy(StrEnum):
@@ -59,6 +85,12 @@ class PhaseKind(StrEnum):
     TIME_POINTS = "time_points"
     VOLTAGE_POINTS = "voltage_points"
     REST = "rest"
+
+
+class SamplingMode(StrEnum):
+    FIXED = "fixed"
+    SEGMENTED = "segmented"
+    MANUAL = "manual"
 
 
 class ProjectConfig(DomainModel):
@@ -126,12 +158,18 @@ class SamplingConfig(DomainModel):
 
 
 class VoltagePointConfig(DomainModel):
-    start_v: PotentialFloat
-    end_v: PotentialFloat
-    step_v: PositiveFloat
+    start_v: PotentialFloat = 3.2
+    end_v: PotentialFloat = 1.5
+    step_v: PositiveFloat = 0.1
+    spacing_mode: SpacingMode = SpacingMode.LINEAR
+    manual_points_v: list[PotentialFloat] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _validate_range(self) -> "VoltagePointConfig":
+        if self.spacing_mode is SpacingMode.MANUAL:
+            if not self.manual_points_v:
+                raise ValueError("manual spacing requires at least one voltage point")
+            return self
         if self.start_v == self.end_v:
             raise ValueError("voltage point range requires start_v and end_v to be different")
         return self
@@ -149,32 +187,82 @@ class TimeSegmentConfig(DomainModel):
 
 
 class TimePointConfig(DomainModel):
-    early: TimeSegmentConfig = Field(default_factory=TimeSegmentConfig)
-    plateau: TimeSegmentConfig = Field(default_factory=TimeSegmentConfig)
-    late: TimeSegmentConfig = Field(default_factory=TimeSegmentConfig)
+    mode: SamplingMode = SamplingMode.SEGMENTED
+    segments: list[TimeSegmentConfig] = Field(default_factory=list, max_length=12)
+    total_duration_minutes: PositiveFloat | None = None
+    fixed_interval_minutes: PositiveFloat | None = None
+    fixed_point_count: int | None = Field(default=None, ge=1, le=500)
+    manual_points_minutes: list[PositiveFloat] = Field(default_factory=list)
     time_basis_mode: TimeBasisMode = TimeBasisMode.ACTIVE_PROGRESS
     manual_eis_duration_s: PositiveFloat | None = None
+    estimated_eis_duration_s: PositiveFloat | None = None
+
+    # Legacy compatibility path for the old three-segment editor.
+    early: TimeSegmentConfig | None = None
+    plateau: TimeSegmentConfig | None = None
+    late: TimeSegmentConfig | None = None
+
+    @model_validator(mode="after")
+    def _normalize_segments(self) -> "TimePointConfig":
+        if not self.segments:
+            legacy_segments = [segment for segment in (self.early, self.plateau, self.late) if segment is not None]
+            if legacy_segments:
+                self.segments = legacy_segments
+        return self
 
     @property
     def total_minutes(self) -> float:
-        return self.early.duration_minutes + self.plateau.duration_minutes + self.late.duration_minutes
+        if self.mode is SamplingMode.MANUAL and self.manual_points_minutes:
+            return float(self.manual_points_minutes[-1])
+        if self.mode is SamplingMode.FIXED:
+            return float(self.total_duration_minutes or 0.0)
+        return float(sum(segment.duration_minutes for segment in self.segments))
 
     @property
     def total_point_count(self) -> int:
-        return self.early.point_count + self.plateau.point_count + self.late.point_count
+        if self.mode is SamplingMode.MANUAL:
+            return len(self.manual_points_minutes)
+        if self.mode is SamplingMode.FIXED:
+            if self.fixed_point_count is not None:
+                return self.fixed_point_count
+            if self.fixed_interval_minutes is None or self.total_duration_minutes is None:
+                return 0
+            return int(self.total_duration_minutes / self.fixed_interval_minutes)
+        return sum(segment.point_count for segment in self.segments)
 
     @model_validator(mode="after")
     def _validate_payload(self) -> "TimePointConfig":
-        if self.total_point_count <= 0:
-            raise ValueError("at least one time segment must define point_count > 0")
+        if self.mode is SamplingMode.MANUAL:
+            if not self.manual_points_minutes:
+                raise ValueError("manual mode requires at least one time point")
+            if any(current <= previous for previous, current in zip(self.manual_points_minutes, self.manual_points_minutes[1:])):
+                raise ValueError("manual time points must be strictly increasing")
+            return self
+
+        if self.mode is SamplingMode.FIXED:
+            if self.total_duration_minutes is None:
+                raise ValueError("fixed mode requires total_duration_minutes")
+            has_interval = self.fixed_interval_minutes is not None
+            has_count = self.fixed_point_count is not None
+            if not has_interval and not has_count:
+                raise ValueError("fixed mode requires fixed_interval_minutes or fixed_point_count")
+            if has_interval and self.fixed_interval_minutes is not None and self.fixed_interval_minutes >= self.total_duration_minutes:
+                raise ValueError("fixed_interval_minutes must be smaller than total_duration_minutes")
+            return self
+
+        if not self.segments:
+            raise ValueError("segmented mode requires at least one segment")
+        if len(self.segments) > 12:
+            raise ValueError("segmented mode supports at most 12 segments")
+        if sum(segment.point_count for segment in self.segments) <= 0:
+            raise ValueError("at least one segment must define point_count > 0")
         if self.total_minutes <= 0:
             raise ValueError("total time duration must be greater than 0")
-        if self.time_basis_mode is TimeBasisMode.INTERRUPTION_COMPENSATED and self.manual_eis_duration_s is None:
-            raise ValueError("manual_eis_duration_s is required in interruption_compensated mode")
         return self
 
 
 class ImpedanceConfig(DomainModel):
+    mode: ImpedanceMode = ImpedanceMode.POTENTIOSTATIC
     use_open_circuit_init_e: bool = True
     init_e_v: PositiveFloat | None = None
     high_frequency_hz: PositiveFloat = 100000.0
@@ -292,6 +380,7 @@ class ValidationIssue(DomainModel):
     message: str
     field: str | None = None
     hint: str | None = None
+    risk_level: RiskLevel | None = None
 
 
 class ValidationResult(DomainModel):
@@ -315,6 +404,7 @@ class PointPlan(DomainModel):
     deltas: list[float] = Field(default_factory=list)
     actual_points: list[float] = Field(default_factory=list)
     compensation_offsets: list[float] = Field(default_factory=list)
+    eis_duration_s: float = 0.0
 
     @property
     def compensation_total(self) -> float:
@@ -323,18 +413,30 @@ class PointPlan(DomainModel):
         return float(self.compensation_offsets[-1])
 
 
+class SocTracePoint(DomainModel):
+    time_s: float = 0.0
+    soc_percent: float = 100.0
+
+
 class PhaseRenderPlan(DomainModel):
     phase_index: int
     label: str
     phase_kind: PhaseKind
     direction: ProcessDirection | None = None
+    sampling_mode: SamplingMode | SpacingMode | None = None
     effective_points: list[float] = Field(default_factory=list)
     rendered_points: list[float] = Field(default_factory=list)
     deltas_s: list[float] = Field(default_factory=list)
     compensation_offsets_min: list[float] = Field(default_factory=list)
+    eis_marker_times_s: list[float] = Field(default_factory=list)
+    lost_eis_marker_times_s: list[float] = Field(default_factory=list)
     point_count: int = 0
     eis_count: int = 0
     wall_clock_total_s: float = 0.0
+    start_time_s: float = 0.0
+    end_time_s: float = 0.0
+    operating_current_a: float | None = None
+    eis_duration_s: float = 0.0
     insert_eis_after_each_point: bool = False
     time_basis_mode: TimeBasisMode | None = None
 
@@ -345,6 +447,7 @@ class ScriptBundle(DomainModel):
     minimal_script: str = ""
     issues: list[ValidationIssue] = Field(default_factory=list)
     one_c_current_a: float | None = None
+    estimated_eis_duration_s: float | None = None
     summary_lines: list[str] = Field(default_factory=list)
 
     @property
@@ -358,6 +461,9 @@ class SequenceScriptBundle(ScriptBundle):
     total_wall_clock_s: float = 0.0
     total_point_count: int = 0
     total_eis_count: int = 0
+    soc_trace: list[SocTracePoint] = Field(default_factory=list)
+    soc_zero_time_s: float | None = None
+    lost_checkpoint_count: int = 0
 
 
 __all__ = [
@@ -382,13 +488,18 @@ __all__ = [
     "PulseConfig",
     "PulseCurrentConfig",
     "RelaxationMode",
+    "RiskLevel",
     "RestPhase",
     "SamplingConfig",
+    "SamplingMode",
     "ScriptBundle",
     "ScriptKind",
     "ScriptVariant",
     "SequenceScriptBundle",
     "Severity",
+    "SocTracePoint",
+    "SpacingMode",
+    "SuggestedPlan",
     "TimeBasisMode",
     "TimePointConfig",
     "TimePointPhase",
