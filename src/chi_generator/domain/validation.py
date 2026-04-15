@@ -146,25 +146,8 @@ def validate_sequence_request(request: ExperimentSequenceRequest) -> ValidationR
                 code="charge_cp_peis_transition",
                 field="phases",
                 message="Charge voltage checkpoints switch directly from CP into PEIS at the target voltage.",
-                hint="The generator now renders charge CP with eh=target and el=lower safety limit; confirm the lower limit is a real protection floor.",
+                hint="The generator renders charge CP with eh=target and el=lower safety limit; treat lower_v as the safety floor and keep target points ascending.",
                 risk_level=RiskLevel.HIGH,
-            )
-        )
-
-    if any(
-        isinstance(phase, VoltagePointPhase)
-        and phase.direction.value == "charge"
-        and phase.insert_eis_after_each_point
-        for phase in request.phases
-    ):
-        warnings.append(
-            ValidationIssue(
-                severity=Severity.INFO,
-                code="charge_voltage_cp_limits",
-                field="phases",
-                message="Charge voltage checkpoints stop CP at the target voltage and then start EIS from the same target potential.",
-                hint="For charge voltage-point phases, treat lower_v as the safety floor and keep target points in ascending order.",
-                risk_level=RiskLevel.MEDIUM,
             )
         )
 
@@ -248,13 +231,9 @@ def validate_request(request: ExperimentRequest) -> ValidationResult:
     return ValidationResult()
 
 
-validate_experiment_request = validate_request
-
-
 __all__ = [
     "FREQUENT_DIRECTION_SWITCH_THRESHOLD",
     "INTERRUPTION_WARNING_THRESHOLD",
-    "validate_experiment_request",
     "validate_request",
     "validate_sequence_request",
 ]

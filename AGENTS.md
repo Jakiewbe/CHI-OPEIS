@@ -4,7 +4,7 @@
 This repository is a local GUI application generator for CHI in-situ EIS scripts.
 
 ## Rules
-- Develop a local desktop GUI application (using [UI Framework Name]).
+- Prefer Python 3.11+, PySide6/Fluent-Widgets for UI, pydantic for models, pytest for tests.
 - Ensure strict separation of concerns: UI logic MUST NOT mix with domain/calculation logic.
 - Prefer Python 3.11+, pydantic for models, pytest for tests.
 - Never emit formulas in final CHI scripts; output pure commands.

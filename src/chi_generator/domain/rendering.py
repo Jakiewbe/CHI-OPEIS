@@ -143,7 +143,7 @@ def _render_impedance(
     impedance: ImpedanceConfig,
     *,
     save_name: str,
-    force_potentiostatic: bool = False,
+    force_potentiostatic: bool = False,  # TODO: implement PEIS/GEIS mode switching
     init_e_v: float | None = None,
 ) -> list[str]:
     del force_potentiostatic

@@ -1,79 +1,57 @@
 # Domain Design
 
-`opeis_master.domain` is the stable typed domain surface for OPEIS Master.
+`chi_generator.domain` is the stable typed domain surface for CHI-OPEIS.
 It exists to give the UI, application, renderer, and tests a shared contract
 without embedding calculation logic in the GUI layer.
 
 ## Scope
 
-The domain layer currently owns:
+The domain layer owns:
 
-- current input normalization
-- C-rate and current conversion helpers
-- segmented cumulative timepoint planning
-- cumulative-time to delta-time conversion
-- normalized `ScriptStep` structures for later rendering
-- lightweight validation/result contracts shared by higher layers
+- pydantic 领域模型（配置、工步、校验、渲染计划）
+- 电流与 C-rate 换算
+- 电压点/时间点/分段时间点规划
+- Warning / Error 校验
+- CHI Macro Command 纯文本渲染
 
-The domain layer does not directly render CHI macro text.
+## Current Input
 
-## Current Input Modes
+电流配置通过 `CurrentSetpointConfig` 和 `CurrentBasisConfig` 两种模式：
 
-The canonical current API is:
+- `CurrentInputMode.RATE` — 按 C-rate 指定
+- `CurrentInputMode.ABSOLUTE` — 按绝对电流指定
 
-- `CurrentInputConfig`
-- `RateCurrentReference`
-- `NormalizedCurrent`
-
-Supported input paths:
-
-1. `CurrentInputMode.DIRECT_1C`
-2. `CurrentInputMode.INFERRED_FROM_RATE`
-
-Both paths normalize into a single `NormalizedCurrent` model so downstream code
-does not need separate branches.
+下游通过 `CurrentResolution` 获得统一的 `one_c_current_a` + `operating_current_a`。
 
 ## Timepoint Planning
 
-Segment planning uses:
+时间点规划通过：
 
-- `TimeSegment`
-- `TimepointPlan`
-- `expand_uniform_segment()`
-- `expand_timepoint_plan()`
-- `cumulative_timepoints_to_deltas()`
-- `timepoint_plan_to_deltas()`
+- `TimePointConfig` — 支持 segmented / fixed / manual 三种模式
+- `expand_time_segments()` — 展开为严格递增的时间点列表
+- `cumulative_timepoints_to_deltas()` — 累积时间转增量
+- `compensate_time_points()` — 中断补偿
+- `capacity_compensate_time_points()` — 等效容量补偿（CTC）
 
-Rules:
+规则：
 
-- timepoints must be strictly increasing
-- generated deltas must be strictly positive
-- the first delta is measured from `initial_time` to the first cumulative point
+- 时间点必须严格递增
+- 生成的 delta 必须严格为正
+- CTC 模式下会缩短电流保持时间以抵消 EIS 容量消耗
 
 ## Normalized Steps
 
-The normalized step contract is:
-
-- `ScriptStep`
-- `RestStepParameters`
-- `ConstantCurrentStepParameters`
-- `ImpedanceStepParameters`
-- `OcvStepParameters`
-
-These are intermediate typed records, not final CHI command text.
+渲染层使用 `PhaseRenderPlan`、`PointPlan`、`SocTracePoint` 等中间记录，最终输出 CHI 命令文本。
 
 ## Public API
 
-Recommended imports:
+推荐导入路径：
 
-- `from opeis_master.domain import CurrentInputConfig`
-- `from opeis_master.domain import normalize_current_input`
-- `from opeis_master.domain import TimeSegment, TimepointPlan`
-- `from opeis_master.domain import expand_timepoint_plan, timepoint_plan_to_deltas`
-- `from opeis_master.domain import ScriptStep`
+- `from chi_generator.domain import ExperimentSequenceRequest`
+- `from chi_generator.domain import ScriptGenerationService`
+- `from chi_generator.domain import validate_sequence_request`
+- `from chi_generator.domain import ImpedanceConfig, TimePointConfig, VoltagePointConfig`
 
-## Compatibility Note
+## Compatibility Layer
 
-The repository still contains a `chi_generator` package used by the current GUI
-compatibility path. New domain-first code should target `opeis_master.domain`
-and `opeis_master.models` as the preferred contracts.
+仓库仍保留 `opeis_master` 兼容层以支持旧测试路径。新代码应统一使用 `chi_generator.domain`。

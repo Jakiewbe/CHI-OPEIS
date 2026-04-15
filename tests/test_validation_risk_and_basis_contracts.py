@@ -125,6 +125,6 @@ def test_charge_voltage_checkpoints_warn_about_cp_target_usage() -> None:
 
     result = validate_sequence_request(request)
 
-    warning = next(issue for issue in result.warnings if issue.code == "charge_voltage_cp_limits")
-    assert warning.risk_level is RiskLevel.MEDIUM
-    assert "target voltage" in warning.message
+    warning = next(issue for issue in result.warnings if issue.code == "charge_cp_peis_transition")
+    assert warning.risk_level is RiskLevel.HIGH
+    assert "target voltage" in warning.message or "safety floor" in warning.hint

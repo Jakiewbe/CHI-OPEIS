@@ -15,3 +15,4 @@ tmp-*.json
 CHI电化学工作站-用户手册.pdf
 Model_600F_Series_User_Manual.pdf
 cfx原位阻抗脚本知识库.md
+*.egg-info/

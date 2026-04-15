@@ -27,10 +27,35 @@ a = Analysis(
         'opeis_master.models',
         'opeis_master.renderers',
         'opeis_master.ui',
+        'setuptools',
+        'pip',
+        'distutils',
+        'wheel',
     ],
     noarchive=False,
     optimize=0,
 )
+
+# Prune non-essential PySide6 translation files.
+# Keep only zh_CN, zh_TW, and en translations (~12 files instead of ~96).
+_keep_translations = frozenset({
+    'qt_zh_CN.qm', 'qt_zh_TW.qm', 'qt_en.qm',
+    'qtbase_zh_CN.qm', 'qtbase_zh_TW.qm', 'qtbase_en.qm',
+    'qt_help_zh_CN.qm', 'qt_help_zh_TW.qm', 'qt_help_en.qm',
+})
+
+from PyInstaller.building.datastruct import TOC
+import os
+
+_filtered_datas = TOC()
+for item in a.datas:
+    name = os.path.basename(item[0])
+    if name.endswith('.qm') and 'PySide6' in item[0] and 'translations' in item[0]:
+        if name not in _keep_translations:
+            continue
+    _filtered_datas.append(item)
+a.datas = _filtered_datas
+
 pyz = PYZ(a.pure)
 
 exe = EXE(

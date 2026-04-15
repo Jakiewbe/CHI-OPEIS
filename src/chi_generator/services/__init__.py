@@ -1,6 +1,5 @@
-"""Service layer for CHI generation and preset persistence."""
+"""Service layer for preset persistence."""
 
 from .presets import PRESET_EXTENSION, PresetService
-from .script_generation import ScriptGenerationService
 
-__all__ = ["PRESET_EXTENSION", "PresetService", "ScriptGenerationService"]
+__all__ = ["PRESET_EXTENSION", "PresetService"]
