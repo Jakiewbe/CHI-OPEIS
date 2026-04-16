@@ -80,31 +80,30 @@ def wrap_commented_script(*, summary_lines: list[str], script_lines: list[str], 
 
 
 class SaveNameAllocator:
-    """Allocate unique save names and avoid collisions with existing exports."""
+    """Allocate unique save names within a single script generation session.
+
+    Since the generated script uses ``fileoverride`` (CHI overwrites existing
+    files on disk), we no longer scan the export directory for occupied names.
+    We only ensure uniqueness within the current script to avoid self-collisions.
+    """
 
     def __init__(self, export_dir: Path) -> None:
-        self._occupied = self._load_occupied(export_dir)
+        del export_dir  # kept for backward-compatible signature
         self._used: set[str] = set()
         self._next_by_base: Counter[str] = Counter()
-
-    @staticmethod
-    def _load_occupied(export_dir: Path) -> set[str]:
-        if not export_dir.exists() or not export_dir.is_dir():
-            return set()
-        return {path.stem.lower() for path in export_dir.iterdir() if path.is_file()}
 
     def allocate(self, preferred: str) -> str:
         base = preferred.strip() or "CHI"
         key = base.lower()
 
-        if key not in self._next_by_base and key not in self._occupied and key not in self._used:
+        if key not in self._next_by_base and key not in self._used:
             self._used.add(key)
             self._next_by_base[key] = 2
             return base
 
         index = self._next_by_base[key] or 2
         candidate = f"{base}_{index:03d}"
-        while candidate.lower() in self._occupied or candidate.lower() in self._used:
+        while candidate.lower() in self._used:
             index += 1
             candidate = f"{base}_{index:03d}"
         self._used.add(candidate.lower())
