@@ -63,6 +63,23 @@ def test_preview_panel_keeps_summary_and_single_minimal_editor(qt_app) -> None:
         window.close()
 
 
+def test_status_overview_card_can_grow_to_fit_preview_text(qt_app) -> None:
+    app, window = build_application()
+    try:
+        window.resize(1280, 840)
+        window.show()
+        app.processEvents()
+        assert window.status_card.maximumHeight() > window.status_card.sizeHint().height()
+        assert window.status_card.minimumHeight() >= 220
+        assert window.workspace_mode_label.wordWrap() is True
+        assert window.workspace_headline.wordWrap() is True
+        assert window.workspace_copy.wordWrap() is True
+        assert window.current_preview_label.wordWrap() is True
+        assert "\n1C：" in window.current_preview_label.text()
+    finally:
+        window.close()
+
+
 def test_project_and_sampling_controls_expose_browse_and_presets(qt_app) -> None:
     app, window = build_application()
     try:

@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QCheckBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QSplitter, QStatusBar, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QCheckBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QSizePolicy, QSplitter, QStatusBar, QVBoxLayout, QWidget
 from qfluentwidgets import FluentIcon as FIF, LineEdit, MSFluentWindow, PrimaryPushButton, PushButton, ScrollArea, Theme, setTheme
 
 from chi_generator.domain.models import ImpedanceMeasurementMode, ProcessDirection, SamplingMode, ScriptBundle, ScriptKind, SequenceScriptBundle, Severity, ValidationIssue
@@ -112,11 +112,13 @@ class MainWindow(MSFluentWindow):
         self.workspace_mode_label = QLabel("序列模式", self.status_card)
         self.workspace_headline = QLabel("工步列表在左，脚本与风险预览在右。", self.status_card)
         self.workspace_copy = QLabel("生成前会突出显示高风险设置、SoC 风险和可能丢失的点位。", self.status_card)
-        self.workspace_copy.setWordWrap(True)
         self.current_preview_label = QLabel("-", self.status_card)
         for widget in (self.workspace_mode_label, self.workspace_headline, self.workspace_copy, self.current_preview_label):
+            widget.setWordWrap(True)
+            widget.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
             self.status_card.content_layout.addWidget(widget)
-        self.status_card.setMaximumHeight(170)
+        self.status_card.setMinimumHeight(220)
+        self.status_card.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
         layout.addWidget(self.status_card)
         self.issue_card = Card("警告与错误", panel, "生成前必须先确认的风险提示。")
         self.issue_list = IssueListWidget(self.issue_card)
@@ -847,7 +849,7 @@ class MainWindow(MSFluentWindow):
         basis_text = "参考基准" if state.current_basis_mode is CurrentBasisUiMode.REFERENCE else "材料基准"
         self.current_basis_value.setText(f"{basis_text} | 1C = {one_c_current_a:.9f} A")
         self.current_operating_value.setText(f"{operating_current_a:.9f} A | {operating_rate_c:g} C")
-        self.current_preview_label.setText(f"{operating_current_a:.9f} A | {operating_rate_c:g} C | 1C = {one_c_current_a:.9f} A")
+        self.current_preview_label.setText(f"当前：{operating_current_a:.9g} A | {operating_rate_c:g} C\n1C：{one_c_current_a:.9g} A")
 
     def _update_status_bar(self, bundle: ScriptBundle) -> None:
         error_count = sum(1 for issue in bundle.issues if issue.severity is Severity.ERROR)
