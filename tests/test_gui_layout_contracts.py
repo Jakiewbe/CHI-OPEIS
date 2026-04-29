@@ -70,8 +70,10 @@ def test_project_and_sampling_controls_expose_browse_and_presets(qt_app) -> None
         assert window.export_dir_browse_button.text()
         row = window.phase_editors[0]
         assert isinstance(row.sample_interval_edit, PresetComboBox)
-        assert row.sample_interval_edit.currentText() == "0.001"
+        assert row.sample_interval_edit.currentText() == "1"
         assert isinstance(window.pulse_sample_interval_edit, PresetComboBox)
-        assert window.pulse_sample_interval_edit.currentText() == "0.001"
+        assert window.pulse_sample_interval_edit.currentText() == "1"
+        assert window.pulse_tail_enabled_box.isChecked() is False
+        assert window.pulse_tail_rate_edit.isVisible() is False
     finally:
         window.close()

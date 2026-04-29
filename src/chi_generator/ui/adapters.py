@@ -117,6 +117,7 @@ class GuiBackend:
             low_frequency_hz=parse_float(state.low_frequency_hz, field_label="低频"),
             amplitude_v=parse_float(state.amplitude_v, field_label="电压振幅"),
             quiet_time_s=parse_float(state.quiet_time_s, field_label="静置时间"),
+            measurement_mode=state.impedance_measurement_mode,
         )
 
     def _build_sequence_request(self, validated: GuiValidatedState) -> ExperimentSequenceRequest:
@@ -211,7 +212,7 @@ class GuiBackend:
                 upper_v=parse_float(state.pulse_upper_voltage_v, field_label="脉冲上限电压"),
                 lower_v=parse_float(state.pulse_lower_voltage_v, field_label="脉冲下限电压"),
             ),
-            sampling=SamplingConfig(pre_wait_s=parse_float(state.pulse_pre_wait_s, field_label="点前等待"), sample_interval_s=0.001),
+            sampling=SamplingConfig(pre_wait_s=parse_float(state.pulse_pre_wait_s, field_label="点前等待"), sample_interval_s=1.0),
             impedance=self._build_impedance_defaults(state),
         )
         relaxation_current = None
@@ -229,6 +230,21 @@ class GuiBackend:
             pulse_duration_s=parse_float(state.pulse_duration_s, field_label="脉冲时长"),
             pulse_count=parse_int(state.pulse_count, field_label="脉冲次数"),
             sample_interval_s=parse_float(state.pulse_sample_interval_s, field_label="脉冲采样间隔"),
+            append_tail_voltage_phase=state.pulse_tail_enabled,
+            tail_current=self._build_current_setpoint(state.pulse_tail_current_mode, state.pulse_tail_rate_c, state.pulse_tail_current_a),
+            tail_voltage_points=VoltagePointConfig(
+                start_v=3.2,
+                end_v=1.5,
+                step_v=0.1,
+                spacing_mode=SpacingMode.MANUAL,
+                manual_points_v=parse_float_list(state.pulse_tail_manual_points_text),
+            ),
+            tail_voltage_window=VoltageWindowConfig(
+                upper_v=max(parse_float_list(state.pulse_tail_manual_points_text) or [parse_float(state.pulse_upper_voltage_v, field_label="脉冲上限电压")]),
+                lower_v=min(parse_float_list(state.pulse_tail_manual_points_text) or [parse_float(state.pulse_lower_voltage_v, field_label="脉冲下限电压")]),
+            ),
+            tail_sample_interval_s=parse_float(state.pulse_tail_sample_interval_s, field_label="追加段采样间隔"),
+            tail_insert_eis_after_each_point=state.pulse_tail_insert_eis,
         )
         return request
 

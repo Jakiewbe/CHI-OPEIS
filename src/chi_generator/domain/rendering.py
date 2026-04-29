@@ -20,6 +20,7 @@ from .models import (
     ExperimentRequest,
     ExperimentSequenceRequest,
     ImpedanceConfig,
+    ImpedanceMeasurementMode,
     PhaseKind,
     PhaseRenderPlan,
     PulseConfig,
@@ -156,7 +157,7 @@ def _render_impedance(
     ]
     if impedance.auto_sens:
         lines.append("impautosens")
-    lines.append("impft" if impedance.fit else "impsf")
+    lines.append("impft" if impedance.measurement_mode is ImpedanceMeasurementMode.FT else "impsf")
     lines.extend(["run", f"save={save_name}"])
     return lines
 
@@ -483,6 +484,29 @@ def render_pulse_request(request: ExperimentRequest) -> tuple[list[str], dict[st
                 force_potentiostatic=True,
             )
         )
+    if pulse.append_tail_voltage_phase:
+        tail_current_a = apply_direction(resolve_current(request.battery, request.current_basis, pulse.tail_current).operating_current_a, request.direction)
+        tail_plan = plan_voltage_points(pulse.tail_voltage_points, direction=request.direction)
+        for target_v in tail_plan.points:
+            tag = voltage_tag(target_v)
+            append_block(
+                _render_cp(
+                    current_a=tail_current_a,
+                    target_v=target_v,
+                    high_v=pulse.tail_voltage_window.upper_v,
+                    low_v=pulse.tail_voltage_window.lower_v,
+                    sample_interval_s=pulse.tail_sample_interval_s,
+                    save_name=allocator.allocate(_save_name(prefix, "TAIL_CC", tag)),
+                )
+            )
+            if pulse.tail_insert_eis_after_each_point:
+                append_block(
+                    _render_impedance(
+                        request.impedance,
+                        save_name=allocator.allocate(_save_name(prefix, "TAIL_EIS", tag)),
+                        init_e_v=target_v,
+                    )
+                )
     append_block(_render_common_footer())
     one_c_current = resolve_current(request.battery, request.current_basis, request.discharge_current).one_c_current_a
     return minimal, {

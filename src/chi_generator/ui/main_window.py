@@ -8,12 +8,13 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QCheckBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QSplitter, QStatusBar, QVBoxLayout, QWidget
 from qfluentwidgets import FluentIcon as FIF, LineEdit, MSFluentWindow, PrimaryPushButton, PushButton, ScrollArea, Theme, setTheme
 
-from chi_generator.domain.models import SamplingMode, ScriptBundle, ScriptKind, SequenceScriptBundle, Severity, ValidationIssue
+from chi_generator.domain.models import ImpedanceMeasurementMode, ProcessDirection, SamplingMode, ScriptBundle, ScriptKind, SequenceScriptBundle, Severity, ValidationIssue
 from chi_generator.ui.adapters import GuiBackend
 from chi_generator.ui.models import CurrentBasisUiMode, CurrentInputUiMode, GuiLoopState, GuiPhaseState, GuiState, PhaseUiKind, RelaxationUiMode, WorkflowItemState, WorkspaceMode, expand_workflow_items
 from chi_generator.ui.preview_chart import ScriptPreviewChart
 from chi_generator.ui.presets import PresetFileService
-from chi_generator.ui.widgets import Card, IssueListWidget, LoopBlockWidget, NoWheelComboBox, PresetComboBox, ScriptOutputPanel, WorkstepEditorRow
+from chi_generator.ui.planning import parse_float_list
+from chi_generator.ui.widgets import Card, GuidedManualPointDialog, IssueListWidget, LoopBlockWidget, NoWheelComboBox, PresetComboBox, ScriptOutputPanel, WorkstepEditorRow
 
 
 class MainWindow(MSFluentWindow):
@@ -107,7 +108,7 @@ class MainWindow(MSFluentWindow):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(18, 18, 18, 18)
         layout.setSpacing(14)
-        self.status_card = Card("总览", panel)
+        self.status_card = Card("总览", panel, "当前方案、1C 基准与生成状态。")
         self.workspace_mode_label = QLabel("序列模式", self.status_card)
         self.workspace_headline = QLabel("工步列表在左，脚本与风险预览在右。", self.status_card)
         self.workspace_copy = QLabel("生成前会突出显示高风险设置、SoC 风险和可能丢失的点位。", self.status_card)
@@ -117,17 +118,17 @@ class MainWindow(MSFluentWindow):
             self.status_card.content_layout.addWidget(widget)
         self.status_card.setMaximumHeight(170)
         layout.addWidget(self.status_card)
-        self.issue_card = Card("警告与错误", panel)
+        self.issue_card = Card("警告与错误", panel, "生成前必须先确认的风险提示。")
         self.issue_list = IssueListWidget(self.issue_card)
         self.issue_card.content_layout.addWidget(self.issue_list)
         self.issue_card.setMaximumHeight(170)
         layout.addWidget(self.issue_card, 1)
-        self.planning_card = Card("采样看板", panel)
+        self.planning_card = Card("采样看板", panel, "查看 EIS 中断与 SoC 预测。")
         self.preview_chart = ScriptPreviewChart(self.planning_card)
         self.planning_card.content_layout.addWidget(self.preview_chart)
         self.planning_card.setMinimumHeight(300)
         layout.addWidget(self.planning_card, 1)
-        self.preview_card = Card("脚本预览", panel)
+        self.preview_card = Card("脚本预览", panel, "可直接复制到 CHI Macro Command。")
         self.output_panel = ScriptOutputPanel(self.preview_card)
         self.preview_card.content_layout.addWidget(self.output_panel)
         self.preview_card.setMinimumHeight(420)
@@ -137,7 +138,7 @@ class MainWindow(MSFluentWindow):
         return scroll
 
     def _build_workspace_card(self) -> Card:
-        card = Card("工作区", self)
+        card = Card("工作区", self, "选择脚本模式，管理本地预设。")
         top_row = QHBoxLayout()
         branding = QVBoxLayout()
         branding.addWidget(QLabel("CHI 原位阻抗", card))
@@ -171,7 +172,7 @@ class MainWindow(MSFluentWindow):
         return card
 
     def _build_project_card(self) -> Card:
-        card = Card("项目", self)
+        card = Card("项目", self, "文件名前缀与导出位置会写入最终宏命令。")
         form = QFormLayout()
         self.scheme_name_edit = self._line_edit("方案名称")
         self.file_prefix_edit = self._line_edit("文件前缀")
@@ -189,7 +190,7 @@ class MainWindow(MSFluentWindow):
         return card
 
     def _build_battery_card(self) -> Card:
-        card = Card("电池与电流", self)
+        card = Card("电池与电流", self, "设置 1C 基准，后续倍率会统一换算为安培。")
         self.battery_form = QFormLayout()
         self.active_material_edit = self._line_edit("活性物质量 / mg")
         self.theoretical_capacity_edit = self._line_edit("理论比容量 / mAh g-1")
@@ -211,7 +212,7 @@ class MainWindow(MSFluentWindow):
         return card
 
     def _build_workstep_card(self) -> Card:
-        card = Card("工步列表", self)
+        card = Card("工步列表", self, "从上到下执行；每个点后可独立插入 EIS。")
         header = QHBoxLayout()
         self.workstep_count_pill = self._metric_pill("1 个工步")
         self.total_points_pill = self._metric_pill("0 点")
@@ -243,7 +244,7 @@ class MainWindow(MSFluentWindow):
         return card
 
     def _build_pulse_card(self) -> Card:
-        card = Card("脉冲参数", self)
+        card = Card("脉冲参数", self, "按固定顺序渲染弛豫、脉冲、前后 EIS 与可选尾段。")
         self.pulse_form = QFormLayout()
         self.pulse_relaxation_mode_combo = NoWheelComboBox(card)
         self.pulse_relaxation_mode_combo.addItem("静置", RelaxationUiMode.REST.value)
@@ -261,10 +262,41 @@ class MainWindow(MSFluentWindow):
         self.pulse_current_edit = self._line_edit("脉冲电流 / A")
         self.pulse_duration_edit = self._line_edit("脉冲时长 / s")
         self.pulse_count_edit = self._line_edit("脉冲次数")
-        self.pulse_sample_interval_edit = self._preset_combo(["0.001", "0.002", "0.005", "0.01", "0.1", "1"])
+        self.pulse_sample_interval_edit = self._preset_combo(["1", "0.1", "0.01", "0.005", "0.002", "0.001"])
         self.pulse_upper_voltage_edit = self._line_edit("上限电压 / V")
         self.pulse_lower_voltage_edit = self._line_edit("下限电压 / V")
         self.pulse_pre_wait_edit = self._line_edit("点前等待 / s")
+        self.pulse_tail_enabled_box = QCheckBox("脉冲结束后追加电压放电段", card)
+        self.pulse_tail_current_mode_combo = NoWheelComboBox(card)
+        self.pulse_tail_current_mode_combo.addItem("倍率", CurrentInputUiMode.RATE.value)
+        self.pulse_tail_current_mode_combo.addItem("绝对电流", CurrentInputUiMode.ABSOLUTE.value)
+        self.pulse_tail_rate_edit = self._line_edit("追加段倍率 / C")
+        self.pulse_tail_current_edit = self._line_edit("追加段电流 / A")
+        self.pulse_tail_manual_points_text = ""
+        self.pulse_tail_points_button = self._button("编辑电压点", card)
+        self.pulse_tail_points_status = QLabel("0 个值", card)
+        self.pulse_tail_points_button.clicked.connect(self._edit_pulse_tail_voltage_points)
+        tail_points_row = QHBoxLayout()
+        tail_points_row.addWidget(self.pulse_tail_points_button)
+        tail_points_row.addWidget(self.pulse_tail_points_status, 1)
+        self.pulse_tail_points_wrap = QWidget(card)
+        self.pulse_tail_points_wrap.setLayout(tail_points_row)
+        self.pulse_tail_sample_interval_edit = self._preset_combo(["1", "0.1", "0.01", "0.005", "0.002", "0.001"])
+        self.pulse_tail_insert_eis_box = QCheckBox("追加段每个电压点后插入 EIS", card)
+        self.pulse_tail_section = QFrame(card)
+        self.pulse_tail_section.setObjectName("subSection")
+        self.pulse_tail_section_layout = QVBoxLayout(self.pulse_tail_section)
+        self.pulse_tail_section_layout.setContentsMargins(14, 12, 14, 14)
+        self.pulse_tail_section_layout.setSpacing(10)
+        tail_title = QLabel("追加电压放电段", self.pulse_tail_section)
+        tail_title.setObjectName("subSectionTitle")
+        tail_hint = QLabel("所有脉冲结束后执行一次，按 CP 到目标电压并可插入 EIS。", self.pulse_tail_section)
+        tail_hint.setObjectName("phaseHint")
+        tail_hint.setWordWrap(True)
+        self.pulse_tail_section_layout.addWidget(tail_title)
+        self.pulse_tail_section_layout.addWidget(tail_hint)
+        self.pulse_tail_form = QFormLayout()
+        self.pulse_tail_section_layout.addLayout(self.pulse_tail_form)
         for label, field in (
             ("弛豫模式", self.pulse_relaxation_mode_combo),
             ("弛豫时间 / s", self.pulse_relaxation_time_edit),
@@ -280,21 +312,40 @@ class MainWindow(MSFluentWindow):
             ("上限电压 / V", self.pulse_upper_voltage_edit),
             ("下限电压 / V", self.pulse_lower_voltage_edit),
             ("点前等待 / s", self.pulse_pre_wait_edit),
+            ("", self.pulse_tail_enabled_box),
         ):
             self.pulse_form.addRow(label, field)
+        for label, field in (
+            ("追加段电流输入", self.pulse_tail_current_mode_combo),
+            ("追加段倍率 / C", self.pulse_tail_rate_edit),
+            ("追加段电流 / A", self.pulse_tail_current_edit),
+            ("追加段电压点", self.pulse_tail_points_wrap),
+            ("追加段采样间隔 / s", self.pulse_tail_sample_interval_edit),
+            ("", self.pulse_tail_insert_eis_box),
+        ):
+            self.pulse_tail_form.addRow(label, field)
         card.content_layout.addLayout(self.pulse_form)
+        card.content_layout.addWidget(self.pulse_tail_section)
         return card
 
     def _build_impedance_card(self) -> Card:
-        card = Card("阻抗参数", self)
+        card = Card("阻抗参数", self, "默认使用 IMPFT；IMPSF 适合对照验证，通常更慢。")
         self.impedance_form = QFormLayout()
         self.use_open_circuit_init_e_box = QCheckBox("使用开路电位作为初始电位（Eoc）", card)
+        self.impedance_measurement_mode_combo = NoWheelComboBox(card)
+        self.impedance_measurement_mode_combo.addItem("FT 快速多频（推荐）", ImpedanceMeasurementMode.FT)
+        self.impedance_measurement_mode_combo.addItem("SF 单频逐点（验证用）", ImpedanceMeasurementMode.SF)
+        self.impedance_mode_hint = QLabel("SF 会逐频测量，通常比 FT 慢；建议只在验证 FT 结果时使用。", card)
+        self.impedance_mode_hint.setObjectName("phaseHint")
+        self.impedance_mode_hint.setWordWrap(True)
         self.init_e_v_edit = self._line_edit("手动初始电位 / V")
         self.high_frequency_edit = self._line_edit("高频 / Hz")
         self.low_frequency_edit = self._line_edit("低频 / Hz")
         self.amplitude_edit = self._line_edit("电压振幅 / V")
         self.quiet_time_edit = self._line_edit("静置时间 / s")
         self.impedance_form.addRow("", self.use_open_circuit_init_e_box)
+        self.impedance_form.addRow("采集模式", self.impedance_measurement_mode_combo)
+        self.impedance_form.addRow("", self.impedance_mode_hint)
         self.impedance_form.addRow("初始电位 / V", self.init_e_v_edit)
         self.impedance_form.addRow("高频 / Hz", self.high_frequency_edit)
         self.impedance_form.addRow("低频 / Hz", self.low_frequency_edit)
@@ -348,10 +399,21 @@ class MainWindow(MSFluentWindow):
             self.pulse_upper_voltage_edit,
             self.pulse_lower_voltage_edit,
             self.pulse_pre_wait_edit,
+            self.pulse_tail_rate_edit,
+            self.pulse_tail_current_edit,
         )
         for edit in edits:
             edit.textChanged.connect(self.schedule_refresh)
-        for combo in (self.mode_combo, self.pulse_relaxation_mode_combo, self.pulse_relaxation_current_mode_combo, self.pulse_current_mode_combo, self.pulse_sample_interval_edit):
+        for combo in (
+            self.mode_combo,
+            self.pulse_relaxation_mode_combo,
+            self.pulse_relaxation_current_mode_combo,
+            self.pulse_current_mode_combo,
+            self.pulse_sample_interval_edit,
+            self.pulse_tail_current_mode_combo,
+            self.pulse_tail_sample_interval_edit,
+            self.impedance_measurement_mode_combo,
+        ):
             if isinstance(combo, PresetComboBox):
                 combo.currentIndexChanged.connect(self.schedule_refresh)
                 combo.lineEdit().textChanged.connect(self.schedule_refresh)
@@ -365,6 +427,10 @@ class MainWindow(MSFluentWindow):
         self.pulse_relaxation_mode_combo.currentIndexChanged.connect(self._sync_pulse_field_visibility)
         self.pulse_relaxation_current_mode_combo.currentIndexChanged.connect(self._sync_pulse_field_visibility)
         self.pulse_current_mode_combo.currentIndexChanged.connect(self._sync_pulse_field_visibility)
+        self.pulse_tail_enabled_box.toggled.connect(self._sync_pulse_field_visibility)
+        self.pulse_tail_enabled_box.toggled.connect(self.schedule_refresh)
+        self.pulse_tail_current_mode_combo.currentIndexChanged.connect(self._sync_pulse_field_visibility)
+        self.pulse_tail_insert_eis_box.toggled.connect(self.schedule_refresh)
         self.export_dir_browse_button.clicked.connect(self._browse_export_directory)
         self.new_preset_button.clicked.connect(self.new_preset)
         self.open_preset_button.clicked.connect(self.open_preset)
@@ -383,17 +449,28 @@ class MainWindow(MSFluentWindow):
     def _apply_styles(self) -> None:
         self.setStyleSheet(
             """
-            QWidget { color: #e6edf3; font-family: 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', sans-serif; }
-            QWidget#workspacePage { background-color: #0d1117; }
-            QWidget#leftPanel, QWidget#rightPanel, QScrollArea#leftScrollArea, QScrollArea#rightScrollArea, QWidget#leftScrollBody { background-color: #0d1117; }
-            #cardWidget { background-color: #161b22; border: 1px solid #30363d; border-radius: 8px; }
-            #cardTitle { color: #79c0ff; font-size: 15px; font-weight: 700; }
-            #fieldLabel, #panelLabel, #phaseHint { color: #8b949e; font-size: 12px; }
-            QLineEdit, QTextEdit, QPlainTextEdit { background-color: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 4px 6px; selection-background-color: #1f6feb; }
-            #stepBadge { background-color: #1b2532; color: #79c0ff; border: 1px solid #35516f; border-radius: 6px; font-weight: 700; padding: 4px 8px; }
-            #metricPill { padding: 4px 10px; border-radius: 10px; background-color: rgba(56, 139, 253, 0.15); color: #79c0ff; border: 1px solid rgba(56, 139, 253, 0.35); }
-            #summaryPanel { background-color: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 8px; }
-            QFrame[workstepRow="true"] { background-color: #0f1620; border: 1px solid #263241; border-radius: 8px; }
+            QWidget { color: #f5f5f7; font-family: 'Segoe UI Variable', 'Segoe UI', 'Microsoft YaHei UI', 'PingFang SC', sans-serif; font-size: 13px; }
+            QWidget#workspacePage { background-color: #0b0b0f; }
+            QWidget#leftPanel, QWidget#rightPanel, QScrollArea#leftScrollArea, QScrollArea#rightScrollArea, QWidget#leftScrollBody { background-color: #0b0b0f; }
+            QScrollArea { border: none; }
+            #cardWidget { background-color: #1d1d20; border: 1px solid rgba(255, 255, 255, 0.09); border-radius: 18px; }
+            #cardTitle { color: #f5f5f7; font-size: 16px; font-weight: 700; letter-spacing: 0.2px; }
+            #cardSubtitle { color: #a1a1a6; font-size: 12px; line-height: 16px; }
+            #fieldLabel, #panelLabel, #phaseHint { color: #a1a1a6; font-size: 12px; }
+            QLabel { color: #f5f5f7; }
+            QLineEdit, QTextEdit, QPlainTextEdit { background-color: #2c2c2e; border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 10px; padding: 7px 10px; selection-background-color: #0a84ff; }
+            QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus { border: 1px solid #0a84ff; background-color: #303034; }
+            ComboBox, EditableComboBox { min-height: 34px; border-radius: 10px; }
+            #stepBadge { background-color: rgba(10, 132, 255, 0.16); color: #64d2ff; border: 1px solid rgba(100, 210, 255, 0.38); border-radius: 11px; font-weight: 700; padding: 5px 10px; }
+            #metricPill { padding: 5px 12px; border-radius: 12px; background-color: rgba(10, 132, 255, 0.14); color: #64d2ff; border: 1px solid rgba(10, 132, 255, 0.30); }
+            #summaryPanel { background-color: #151518; border: 1px solid rgba(255, 255, 255, 0.10); border-radius: 14px; padding: 10px; }
+            #subSection { background-color: #151518; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 14px; }
+            #subSectionTitle { color: #f5f5f7; font-size: 13px; font-weight: 700; }
+            QFrame[workstepRow="true"] { background-color: #17171a; border: 1px solid rgba(255, 255, 255, 0.09); border-radius: 16px; }
+            QFrame[workstepRow="true"]:hover { border: 1px solid rgba(10, 132, 255, 0.42); background-color: #1c1c20; }
+            QCheckBox { spacing: 8px; color: #f5f5f7; }
+            QCheckBox::indicator { width: 16px; height: 16px; border-radius: 5px; border: 1px solid rgba(255, 255, 255, 0.26); background-color: #2c2c2e; }
+            QCheckBox::indicator:checked { background-color: #0a84ff; border: 1px solid #0a84ff; }
             """
         )
 
@@ -561,6 +638,7 @@ class MainWindow(MSFluentWindow):
                 "low_frequency_hz": self.low_frequency_edit.text() or "0.01",
                 "amplitude_v": self.amplitude_edit.text() or "0.005",
                 "quiet_time_s": self.quiet_time_edit.text() or "2",
+                "impedance_measurement_mode": self.impedance_measurement_mode_combo.currentData(),
                 "pulse_relaxation_mode": self.pulse_relaxation_mode_combo.currentData(),
                 "pulse_relaxation_time_s": self.pulse_relaxation_time_edit.text() or "60",
                 "pulse_relaxation_current_mode": self.pulse_relaxation_current_mode_combo.currentData(),
@@ -571,10 +649,17 @@ class MainWindow(MSFluentWindow):
                 "pulse_current_a": self.pulse_current_edit.text() or "0.001",
                 "pulse_duration_s": self.pulse_duration_edit.text() or "5",
                 "pulse_count": self.pulse_count_edit.text() or "1",
-                "pulse_sample_interval_s": self.pulse_sample_interval_edit.currentText() or "0.001",
+                "pulse_sample_interval_s": self.pulse_sample_interval_edit.currentText() or "1",
                 "pulse_upper_voltage_v": self.pulse_upper_voltage_edit.text() or "4",
                 "pulse_lower_voltage_v": self.pulse_lower_voltage_edit.text() or "-1",
                 "pulse_pre_wait_s": self.pulse_pre_wait_edit.text() or "0",
+                "pulse_tail_enabled": self.pulse_tail_enabled_box.isChecked(),
+                "pulse_tail_current_mode": self.pulse_tail_current_mode_combo.currentData(),
+                "pulse_tail_rate_c": self.pulse_tail_rate_edit.text() or "0.1",
+                "pulse_tail_current_a": self.pulse_tail_current_edit.text() or "0.0000865",
+                "pulse_tail_manual_points_text": self.pulse_tail_manual_points_text,
+                "pulse_tail_sample_interval_s": self.pulse_tail_sample_interval_edit.currentText() or "1",
+                "pulse_tail_insert_eis": self.pulse_tail_insert_eis_box.isChecked(),
             }
         )
 
@@ -597,6 +682,7 @@ class MainWindow(MSFluentWindow):
             self.low_frequency_edit.setText(state.low_frequency_hz)
             self.amplitude_edit.setText(state.amplitude_v)
             self.quiet_time_edit.setText(state.quiet_time_s)
+            self.impedance_measurement_mode_combo.setCurrentIndex(self.impedance_measurement_mode_combo.findData(state.impedance_measurement_mode.value))
             self.pulse_relaxation_mode_combo.setCurrentIndex(self.pulse_relaxation_mode_combo.findData(state.pulse_relaxation_mode.value))
             self.pulse_relaxation_time_edit.setText(state.pulse_relaxation_time_s)
             self.pulse_relaxation_current_mode_combo.setCurrentIndex(self.pulse_relaxation_current_mode_combo.findData(state.pulse_relaxation_current_mode.value))
@@ -611,6 +697,14 @@ class MainWindow(MSFluentWindow):
             self.pulse_upper_voltage_edit.setText(state.pulse_upper_voltage_v)
             self.pulse_lower_voltage_edit.setText(state.pulse_lower_voltage_v)
             self.pulse_pre_wait_edit.setText(state.pulse_pre_wait_s)
+            self.pulse_tail_enabled_box.setChecked(state.pulse_tail_enabled)
+            self.pulse_tail_current_mode_combo.setCurrentIndex(self.pulse_tail_current_mode_combo.findData(state.pulse_tail_current_mode.value))
+            self.pulse_tail_rate_edit.setText(state.pulse_tail_rate_c)
+            self.pulse_tail_current_edit.setText(state.pulse_tail_current_a)
+            self.pulse_tail_manual_points_text = state.pulse_tail_manual_points_text
+            self._refresh_pulse_tail_points_status()
+            self.pulse_tail_sample_interval_edit.setEditText(state.pulse_tail_sample_interval_s)
+            self.pulse_tail_insert_eis_box.setChecked(state.pulse_tail_insert_eis)
         finally:
             self._updating_ui = False
         self._sync_workspace_mode()
@@ -644,15 +738,47 @@ class MainWindow(MSFluentWindow):
             widget.setVisible(visible)
         self.current_basis_value.setText("用已知倍率和对应电流反推 1C。" if visible else "半电池通常直接按材料参数换算 1C。")
 
+    def _edit_pulse_tail_voltage_points(self) -> None:
+        dialog = GuidedManualPointDialog(
+            title="编辑追加段电压点",
+            text=self.pulse_tail_manual_points_text,
+            is_voltage=True,
+            direction=ProcessDirection.DISCHARGE,
+            parent=self,
+        )
+        if dialog.exec():
+            self.pulse_tail_manual_points_text = dialog.value()
+            self._refresh_pulse_tail_points_status()
+            self.schedule_refresh()
+
+    def _refresh_pulse_tail_points_status(self) -> None:
+        values = parse_float_list(self.pulse_tail_manual_points_text)
+        if not values:
+            self.pulse_tail_points_status.setText("0 个值")
+            return
+        self.pulse_tail_points_status.setText(f"{len(values)} 个值 · {values[0]:g} → {values[-1]:g} V")
+
     def _sync_pulse_field_visibility(self) -> None:
         relaxation_mode_is_cc = self.pulse_relaxation_mode_combo.currentData() == RelaxationUiMode.CONSTANT_CURRENT.value
         pulse_mode_is_absolute = self.pulse_current_mode_combo.currentData() == CurrentInputUiMode.ABSOLUTE.value
         relaxation_mode_is_absolute = self.pulse_relaxation_current_mode_combo.currentData() == CurrentInputUiMode.ABSOLUTE.value
+        tail_enabled = self.pulse_tail_enabled_box.isChecked()
+        tail_mode_is_absolute = self.pulse_tail_current_mode_combo.currentData() == CurrentInputUiMode.ABSOLUTE.value
         self._set_form_row_visible(self.pulse_form, self.pulse_relaxation_current_mode_combo, relaxation_mode_is_cc)
         self._set_form_row_visible(self.pulse_form, self.pulse_relaxation_rate_edit, relaxation_mode_is_cc and not relaxation_mode_is_absolute)
         self._set_form_row_visible(self.pulse_form, self.pulse_relaxation_current_edit, relaxation_mode_is_cc and relaxation_mode_is_absolute)
         self._set_form_row_visible(self.pulse_form, self.pulse_rate_edit, not pulse_mode_is_absolute)
         self._set_form_row_visible(self.pulse_form, self.pulse_current_edit, pulse_mode_is_absolute)
+        for widget in (
+            self.pulse_tail_current_mode_combo,
+            self.pulse_tail_points_wrap,
+            self.pulse_tail_sample_interval_edit,
+            self.pulse_tail_insert_eis_box,
+        ):
+            self._set_form_row_visible(self.pulse_tail_form, widget, tail_enabled)
+        self._set_form_row_visible(self.pulse_tail_form, self.pulse_tail_rate_edit, tail_enabled and not tail_mode_is_absolute)
+        self._set_form_row_visible(self.pulse_tail_form, self.pulse_tail_current_edit, tail_enabled and tail_mode_is_absolute)
+        self.pulse_tail_section.setVisible(tail_enabled)
 
     def _set_form_row_visible(self, form: QFormLayout, widget: QWidget, visible: bool) -> None:
         label = form.labelForField(widget)

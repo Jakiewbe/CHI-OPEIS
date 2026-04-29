@@ -76,6 +76,11 @@ class ImpedanceMode(StrEnum):
     POTENTIOSTATIC = "potentiostatic"
 
 
+class ImpedanceMeasurementMode(StrEnum):
+    FT = "ft"
+    SF = "sf"
+
+
 class PlanningStrategy(StrEnum):
     LEGACY_DEFAULT = "legacy_default"
     INTERRUPTION_AWARE = "interruption_aware"
@@ -154,7 +159,7 @@ class VoltageWindowConfig(DomainModel):
 
 class SamplingConfig(DomainModel):
     pre_wait_s: NonNegativeFloat = 0.0
-    sample_interval_s: NonNegativeFloat = 0.001
+    sample_interval_s: NonNegativeFloat = 1.0
 
 
 class VoltagePointConfig(DomainModel):
@@ -263,6 +268,7 @@ class TimePointConfig(DomainModel):
 
 class ImpedanceConfig(DomainModel):
     mode: ImpedanceMode = ImpedanceMode.POTENTIOSTATIC
+    measurement_mode: ImpedanceMeasurementMode = ImpedanceMeasurementMode.FT
     use_open_circuit_init_e: bool = True
     init_e_v: PositiveFloat | None = None
     high_frequency_hz: PositiveFloat = 100000.0
@@ -273,12 +279,23 @@ class ImpedanceConfig(DomainModel):
     auto_sens: bool = True
     fit: bool = True
 
+    @model_validator(mode="before")
+    @classmethod
+    def _compat_before(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        raw = dict(value)
+        if "measurement_mode" not in raw and "fit" in raw:
+            raw["measurement_mode"] = ImpedanceMeasurementMode.FT.value if raw.get("fit", True) else ImpedanceMeasurementMode.SF.value
+        return raw
+
     @model_validator(mode="after")
     def _validate_config(self) -> "ImpedanceConfig":
         if self.high_frequency_hz <= self.low_frequency_hz:
             raise ValueError("high_frequency_hz must be greater than low_frequency_hz")
         if not self.use_open_circuit_init_e and self.init_e_v is None:
             raise ValueError("init_e_v is required when use_open_circuit_init_e is false")
+        self.fit = self.measurement_mode is ImpedanceMeasurementMode.FT
         return self
 
 
@@ -348,7 +365,13 @@ class PulseConfig(DomainModel):
     pulse_current: PulseCurrentConfig = Field(default_factory=PulseCurrentConfig)
     pulse_duration_s: PositiveFloat = 5.0
     pulse_count: int = Field(default=1, ge=1, le=1000)
-    sample_interval_s: NonNegativeFloat = 0.001
+    sample_interval_s: NonNegativeFloat = 1.0
+    append_tail_voltage_phase: bool = False
+    tail_current: CurrentSetpointConfig = Field(default_factory=CurrentSetpointConfig)
+    tail_voltage_points: VoltagePointConfig = Field(default_factory=VoltagePointConfig)
+    tail_voltage_window: VoltageWindowConfig = Field(default_factory=VoltageWindowConfig)
+    tail_sample_interval_s: NonNegativeFloat = 1.0
+    tail_insert_eis_after_each_point: bool = True
 
     @model_validator(mode="after")
     def _validate_relaxation(self) -> "PulseConfig":
@@ -478,6 +501,7 @@ __all__ = [
     "ExperimentRequest",
     "ExperimentSequenceRequest",
     "ImpedanceConfig",
+    "ImpedanceMeasurementMode",
     "IssueSeverity",
     "PhaseKind",
     "PhaseRenderPlan",

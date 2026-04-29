@@ -6,6 +6,7 @@ from .calculations import IMPFT_BASELINE_S, estimate_eis_scan_duration_s, plan_t
 from .models import (
     ExperimentRequest,
     ExperimentSequenceRequest,
+    ImpedanceMeasurementMode,
     RestPhase,
     RiskLevel,
     ScriptKind,
@@ -106,6 +107,18 @@ def validate_sequence_request(request: ExperimentSequenceRequest) -> ValidationR
                 field="impedance_defaults.low_frequency_hz",
                 message="Dense EIS points with fl=0.01 Hz are marked high-risk by default.",
                 hint=f"IMPFT simulation uses {IMPFT_BASELINE_S:.0f} s per point for capacity-risk preview.",
+                risk_level=RiskLevel.HIGH,
+            )
+        )
+
+    if request.impedance_defaults.measurement_mode is ImpedanceMeasurementMode.SF and request.impedance_defaults.low_frequency_hz <= 0.01 and total_eis_points >= INTERRUPTION_WARNING_THRESHOLD:
+        warnings.append(
+            ValidationIssue(
+                severity=Severity.WARNING,
+                code="impsf_slow_dense_eis",
+                field="impedance_defaults.measurement_mode",
+                message="IMPSF single-frequency stepping is usually slower than IMPFT for dense low-frequency in-situ EIS.",
+                hint="Use SF mainly as a verification/control mode when FT results are questionable; keep FT for long routine in-situ runs.",
                 risk_level=RiskLevel.HIGH,
             )
         )
@@ -217,6 +230,7 @@ def validate_sequence_request(request: ExperimentSequenceRequest) -> ValidationR
 def validate_request(request: ExperimentRequest) -> ValidationResult:
     if request.kind is ScriptKind.PULSE:
         errors: list[ValidationIssue] = []
+        warnings: list[ValidationIssue] = []
         if request.pulse is None:
             errors.append(
                 ValidationIssue(
@@ -227,7 +241,33 @@ def validate_request(request: ExperimentRequest) -> ValidationResult:
                     risk_level=RiskLevel.BLOCKING,
                 )
             )
-        return ValidationResult(errors=errors, warnings=[])
+        else:
+            total_eis_points = 1 + request.pulse.pulse_count * 2
+            if request.pulse.append_tail_voltage_phase and request.pulse.tail_insert_eis_after_each_point:
+                try:
+                    total_eis_points += len(plan_voltage_points(request.pulse.tail_voltage_points, direction=request.direction).points)
+                except ValueError as exc:
+                    errors.append(
+                        ValidationIssue(
+                            severity=Severity.ERROR,
+                            code="pulse_tail_invalid",
+                            field="pulse.tail_voltage_points",
+                            message=str(exc),
+                            risk_level=RiskLevel.BLOCKING,
+                        )
+                    )
+            if request.impedance.measurement_mode is ImpedanceMeasurementMode.SF and request.impedance.low_frequency_hz <= 0.01 and total_eis_points >= INTERRUPTION_WARNING_THRESHOLD:
+                warnings.append(
+                    ValidationIssue(
+                        severity=Severity.WARNING,
+                        code="impsf_slow_dense_eis",
+                        field="impedance.measurement_mode",
+                        message="IMPSF single-frequency stepping is usually slower than IMPFT for dense low-frequency in-situ EIS.",
+                        hint="Use SF mainly as a verification/control mode when FT results are questionable; keep FT for long routine in-situ runs.",
+                        risk_level=RiskLevel.HIGH,
+                    )
+                )
+        return ValidationResult(errors=errors, warnings=warnings)
     return ValidationResult()
 
 

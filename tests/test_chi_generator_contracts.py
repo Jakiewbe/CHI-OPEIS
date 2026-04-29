@@ -13,6 +13,7 @@ from chi_generator.domain.models import (
     ExperimentRequest,
     ExperimentSequenceRequest,
     ImpedanceConfig,
+    ImpedanceMeasurementMode,
     ProcessDirection,
     ProjectConfig,
     PulseConfig,
@@ -304,3 +305,69 @@ def test_pulse_generation_still_supported() -> None:
     assert "save=PULSE_REL_01" in bundle.minimal_script
     assert "save=PULSE_PULSE_01" in bundle.minimal_script
     assert "el=-1" in bundle.minimal_script
+
+
+def test_impedance_measurement_mode_renders_ft_or_sf() -> None:
+    request = _base_sequence_request(
+        [
+            VoltagePointPhase(
+                label="Voltage phase",
+                direction=ProcessDirection.DISCHARGE,
+                current_setpoint=CurrentSetpointConfig(mode=CurrentInputMode.RATE, rate_c=0.1),
+                voltage_window=VoltageWindowConfig(upper_v=3.2, lower_v=1.5),
+                sampling=SamplingConfig(pre_wait_s=0.0, sample_interval_s=1.0),
+                voltage_points=VoltagePointConfig(start_v=3.2, end_v=3.1, step_v=0.1),
+            )
+        ]
+    )
+
+    ft_bundle = ScriptGenerationService().generate(request)
+    assert "impft" in ft_bundle.minimal_script
+    assert "impsf" not in ft_bundle.minimal_script
+
+    sf_request = request.model_copy(update={"impedance_defaults": request.impedance_defaults.model_copy(update={"measurement_mode": ImpedanceMeasurementMode.SF})})
+    sf_bundle = ScriptGenerationService().generate(sf_request)
+    assert "impsf" in sf_bundle.minimal_script
+    assert "impft" not in sf_bundle.minimal_script
+
+
+def test_legacy_fit_false_maps_to_impsf() -> None:
+    config = ImpedanceConfig.model_validate({"fit": False, "use_open_circuit_init_e": True})
+
+    assert config.measurement_mode is ImpedanceMeasurementMode.SF
+    assert config.fit is False
+
+
+def test_pulse_tail_voltage_phase_renders_after_all_pulses() -> None:
+    request = ExperimentRequest(
+        kind=ScriptKind.PULSE,
+        project=ProjectConfig(scheme_name="Pulse tail", file_prefix="PTAIL", export_dir=Path(".")),
+        battery=BatteryConfig(active_material_mg=1.0, theoretical_capacity_mah_mg=865.0),
+        current_basis=CurrentBasisConfig(mode=CurrentBasisMode.MATERIAL),
+        discharge_current=CurrentSetpointConfig(mode=CurrentInputMode.RATE, rate_c=0.1),
+        voltage_window=VoltageWindowConfig(upper_v=4.0, lower_v=-1.0),
+        sampling=SamplingConfig(pre_wait_s=0.0, sample_interval_s=1.0),
+        impedance=ImpedanceConfig(use_open_circuit_init_e=True, high_frequency_hz=100000.0, low_frequency_hz=0.01, amplitude_v=0.005, quiet_time_s=2.0),
+        pulse=PulseConfig(
+            relaxation_mode=RelaxationMode.REST,
+            relaxation_time_s=60.0,
+            pulse_current=PulseCurrentConfig(mode=CurrentInputMode.RATE, rate_c=1.0),
+            pulse_duration_s=5.0,
+            pulse_count=2,
+            sample_interval_s=1.0,
+            append_tail_voltage_phase=True,
+            tail_current=CurrentSetpointConfig(mode=CurrentInputMode.RATE, rate_c=0.1),
+            tail_voltage_points=VoltagePointConfig(start_v=3.2, end_v=3.0, step_v=0.1),
+            tail_voltage_window=VoltageWindowConfig(upper_v=4.0, lower_v=-1.0),
+            tail_sample_interval_s=1.0,
+            tail_insert_eis_after_each_point=True,
+        ),
+    )
+
+    bundle = ScriptGenerationService().generate(request)
+
+    assert bundle.can_generate is True
+    assert bundle.minimal_script.index("save=PTAIL_EIS_POST02") < bundle.minimal_script.index("save=PTAIL_TAIL_CC_3.20V")
+    assert "save=PTAIL_TAIL_EIS_3.20V" in bundle.minimal_script
+    save_lines = [line for line in bundle.minimal_script.splitlines() if line.startswith("save=")]
+    assert len(save_lines) == len(set(save_lines))

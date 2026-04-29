@@ -7,7 +7,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from chi_generator.domain.models import ProcessDirection, SamplingMode, TimeBasisMode
+from chi_generator.domain.models import ImpedanceMeasurementMode, ProcessDirection, SamplingMode, TimeBasisMode
 
 
 class WorkspaceMode(StrEnum):
@@ -46,6 +46,11 @@ class VoltageInputUiMode(StrEnum):
     MANUAL = "manual"
 
 
+class TailVoltageUiMode(StrEnum):
+    RANGE = "range"
+    MANUAL = "manual"
+
+
 class WorkflowItemUiKind(StrEnum):
     PHASE = "phase"
     LOOP = "loop"
@@ -71,7 +76,7 @@ class GuiPhaseState(BaseModel):
     upper_voltage_v: str = "3.2"
     lower_voltage_v: str = "1.5"
     pre_wait_s: str = "0"
-    sample_interval_s: str = "0.001"
+    sample_interval_s: str = "1"
     insert_eis_after_each_point: bool = True
 
     voltage_start_v: str = "3.2"
@@ -174,6 +179,7 @@ class GuiDraftState(BaseModel):
     low_frequency_hz: str = "0.01"
     amplitude_v: str = "0.005"
     quiet_time_s: str = "2"
+    impedance_measurement_mode: ImpedanceMeasurementMode = ImpedanceMeasurementMode.FT
 
     pulse_relaxation_mode: RelaxationUiMode = RelaxationUiMode.REST
     pulse_relaxation_time_s: str = "60"
@@ -185,10 +191,17 @@ class GuiDraftState(BaseModel):
     pulse_current_a: str = "0.001"
     pulse_duration_s: str = "5"
     pulse_count: str = "1"
-    pulse_sample_interval_s: str = "0.001"
+    pulse_sample_interval_s: str = "1"
     pulse_upper_voltage_v: str = "4"
     pulse_lower_voltage_v: str = "-1"
     pulse_pre_wait_s: str = "0"
+    pulse_tail_enabled: bool = False
+    pulse_tail_current_mode: CurrentInputUiMode = CurrentInputUiMode.RATE
+    pulse_tail_rate_c: str = "0.1"
+    pulse_tail_current_a: str = "0.0000865"
+    pulse_tail_manual_points_text: str = "3.2\n3.0\n2.8\n2.6\n2.4\n2.2\n2.0\n1.8\n1.5"
+    pulse_tail_sample_interval_s: str = "1"
+    pulse_tail_insert_eis: bool = True
 
     @model_validator(mode="before")
     @classmethod
@@ -202,6 +215,8 @@ class GuiDraftState(BaseModel):
         raw.pop("use_load_init_e", None)
         raw.pop("geis_amplitude_a", None)
         raw.pop("estimated_resistance_ohm", None)
+        if "impedance_measurement_mode" not in raw:
+            raw["impedance_measurement_mode"] = ImpedanceMeasurementMode.FT.value
         raw.setdefault("current_basis_mode", CurrentBasisUiMode.MATERIAL.value)
         raw.setdefault("reference_rate_c", "1")
         raw.setdefault("reference_current_a", "0.000865")
@@ -279,6 +294,7 @@ __all__ = [
     "PhaseUiKind",
     "RecentPresetDocument",
     "RelaxationUiMode",
+    "TailVoltageUiMode",
     "SequencePresetDocument",
     "VoltageInputUiMode",
     "WorkflowItemState",

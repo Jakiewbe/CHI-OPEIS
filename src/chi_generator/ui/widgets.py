@@ -20,16 +20,21 @@ def fixed_font_family() -> str:
 
 
 class Card(SimpleCardWidget):
-    def __init__(self, title: str, parent: QWidget | None = None) -> None:
+    def __init__(self, title: str, parent: QWidget | None = None, subtitle: str = "") -> None:
         super().__init__(parent)
         self.setProperty("isCard", True)
         self.setObjectName("cardWidget")
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(18, 18, 18, 18)
-        layout.setSpacing(12)
+        layout.setContentsMargins(20, 18, 20, 20)
+        layout.setSpacing(14)
         title_label = StrongBodyLabel(title, self)
         title_label.setObjectName("cardTitle")
         layout.addWidget(title_label)
+        if subtitle:
+            subtitle_label = QLabel(subtitle, self)
+            subtitle_label.setObjectName("cardSubtitle")
+            subtitle_label.setWordWrap(True)
+            layout.addWidget(subtitle_label)
         self.content_layout = QVBoxLayout()
         self.content_layout.setSpacing(12)
         layout.addLayout(self.content_layout)
@@ -576,7 +581,7 @@ class WorkstepEditorRow(QFrame):
         root.addLayout(header_bottom)
 
         self.pre_wait_edit = self._line_edit("点前等待 / s")
-        self.sample_interval_edit = self._preset_combo(["0.001", "0.002", "0.005", "0.01", "0.1", "1"])
+        self.sample_interval_edit = self._preset_combo(["1", "0.1", "0.01", "0.005", "0.002", "0.001"])
         self.upper_voltage_edit = self._line_edit("上限 / V")
         self.lower_voltage_edit = self._line_edit("下限 / V")
         self.common_row = self._row(

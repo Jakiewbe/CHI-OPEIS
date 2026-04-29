@@ -12,6 +12,7 @@ from chi_generator.domain import (
     CurrentSetpointConfig,
     ExperimentSequenceRequest,
     ImpedanceConfig,
+    ImpedanceMeasurementMode,
     ProcessDirection,
     ProjectConfig,
     RiskLevel,
@@ -128,3 +129,29 @@ def test_charge_voltage_checkpoints_warn_about_cp_target_usage() -> None:
     warning = next(issue for issue in result.warnings if issue.code == "charge_cp_peis_transition")
     assert warning.risk_level is RiskLevel.HIGH
     assert "target voltage" in warning.message or "safety floor" in warning.hint
+
+
+def test_impsf_dense_low_frequency_warns_without_blocking() -> None:
+    request = ExperimentSequenceRequest(
+        project=ProjectConfig(scheme_name="demo", file_prefix="demo", export_dir=Path.cwd()),
+        battery=BatteryConfig(active_material_mg=1.0, theoretical_capacity_mah_mg=865.0),
+        current_basis=CurrentBasisConfig(mode=CurrentBasisMode.MATERIAL),
+        impedance_defaults=ImpedanceConfig(low_frequency_hz=0.01, measurement_mode=ImpedanceMeasurementMode.SF),
+        phases=[
+            VoltagePointPhase(
+                label="dense-sf",
+                direction=ProcessDirection.DISCHARGE,
+                current_setpoint=CurrentSetpointConfig(mode=CurrentInputMode.RATE, rate_c=0.1),
+                voltage_window=VoltageWindowConfig(upper_v=3.2, lower_v=1.5),
+                sampling=SamplingConfig(pre_wait_s=0, sample_interval_s=1),
+                insert_eis_after_each_point=True,
+                voltage_points=VoltagePointConfig(start_v=3.2, end_v=2.7, step_v=0.1),
+            )
+        ],
+    )
+
+    result = validate_sequence_request(request)
+
+    assert result.can_generate is True
+    warning = next(issue for issue in result.warnings if issue.code == "impsf_slow_dense_eis")
+    assert warning.risk_level is RiskLevel.HIGH
