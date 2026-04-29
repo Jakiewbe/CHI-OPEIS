@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720" role="img" aria-labelledby="title desc">
+  <title id="title">OPEIS Master workspace overview</title>
+  <desc id="desc">A diagram of the CHI OPEIS desktop workspace with grouped inputs, warnings, sampling board, and script preview.</desc>
+  <rect width="1280" height="720" fill="#f5f7fb"/>
+  <rect x="40" y="36" width="1200" height="648" rx="18" fill="#16212f"/>
+  <rect x="72" y="68" width="1136" height="584" rx="14" fill="#202b3a"/>
+  <text x="100" y="114" fill="#f7fafc" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="34" font-weight="700">CHI 原位 EIS 脚本生成器</text>
+  <text x="100" y="148" fill="#9fb0c3" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="18">参数分组在左，风险校验与脚本预览在右</text>
+
+  <rect x="96" y="188" width="330" height="120" rx="10" fill="#2d3a4c" stroke="#4d6079"/>
+  <text x="122" y="226" fill="#ffffff" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="22" font-weight="700">工作区与项目</text>
+  <text x="122" y="260" fill="#c8d3df" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="16">序列 / 脉冲模式</text>
+  <text x="122" y="286" fill="#c8d3df" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="16">方案名、文件前缀、导出目录</text>
+
+  <rect x="96" y="332" width="330" height="120" rx="10" fill="#2d3a4c" stroke="#4d6079"/>
+  <text x="122" y="370" fill="#ffffff" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="22" font-weight="700">电池与电流</text>
+  <text x="122" y="404" fill="#c8d3df" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="16">按材料或已知倍率换算 1C</text>
+  <text x="122" y="430" fill="#c8d3df" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="16">倍率输入自动转换为 CHI 电流</text>
+
+  <rect x="96" y="476" width="330" height="132" rx="10" fill="#2d3a4c" stroke="#4d6079"/>
+  <text x="122" y="514" fill="#ffffff" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="22" font-weight="700">工步 / 脉冲 / 阻抗</text>
+  <text x="122" y="548" fill="#c8d3df" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="16">时间点、电压点、静置与循环块</text>
+  <text x="122" y="574" fill="#c8d3df" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="16">IMPFT / IMPSF、fh/fl/amp/qt</text>
+
+  <rect x="466" y="188" width="330" height="420" rx="10" fill="#263345" stroke="#4d6079"/>
+  <text x="492" y="226" fill="#ffffff" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="22" font-weight="700">工步编辑器</text>
+  <rect x="492" y="258" width="278" height="64" rx="8" fill="#33445b"/>
+  <text x="516" y="298" fill="#dbe6f2" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="17">S01 时间取点：分段 / 手动</text>
+  <rect x="492" y="342" width="278" height="64" rx="8" fill="#33445b"/>
+  <text x="516" y="382" fill="#dbe6f2" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="17">S02 电压取点：范围 / 列表</text>
+  <rect x="492" y="426" width="278" height="64" rx="8" fill="#33445b"/>
+  <text x="516" y="466" fill="#dbe6f2" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="17">L03 循环块：重复执行</text>
+  <rect x="492" y="510" width="278" height="64" rx="8" fill="#33445b"/>
+  <text x="516" y="550" fill="#dbe6f2" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="17">每个点后可独立插入 EIS</text>
+
+  <rect x="836" y="188" width="330" height="118" rx="10" fill="#332c24" stroke="#b47a2f"/>
+  <text x="862" y="226" fill="#ffffff" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="22" font-weight="700">警告与错误</text>
+  <text x="862" y="260" fill="#f3c776" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="16">低频 0.01 Hz、频繁中断、SoC 风险</text>
+  <text x="862" y="286" fill="#f3c776" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="16">Error 会阻止复制脚本</text>
+
+  <rect x="836" y="334" width="330" height="118" rx="10" fill="#21384a" stroke="#4a87a8"/>
+  <text x="862" y="372" fill="#ffffff" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="22" font-weight="700">采样看板</text>
+  <text x="862" y="406" fill="#b9d7ea" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="16">预估 EIS 中断和丢点</text>
+  <text x="862" y="432" fill="#b9d7ea" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="16">帮助调整取点密度</text>
+
+  <rect x="836" y="480" width="330" height="128" rx="10" fill="#263345" stroke="#4d6079"/>
+  <text x="862" y="518" fill="#ffffff" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="22" font-weight="700">脚本预览</text>
+  <text x="862" y="552" fill="#c8d3df" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="16">只输出 CHI 纯命令</text>
+  <text x="862" y="578" fill="#c8d3df" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="16">可直接复制到 Macro Command</text>
+</svg>

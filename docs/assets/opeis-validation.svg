@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="500" viewBox="0 0 1280 500" role="img" aria-labelledby="title desc">
+  <title id="title">OPEIS Master validation model</title>
+  <desc id="desc">A visual summary of warning and error handling before script generation.</desc>
+  <rect width="1280" height="500" fill="#f7fafc"/>
+  <text x="64" y="74" fill="#1f2937" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="34" font-weight="700">生成前先看风险</text>
+  <text x="64" y="108" fill="#5b6776" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="18">Warning 不会隐藏，Error 会直接阻止复制，避免不合理参数进入实验</text>
+
+  <rect x="74" y="166" width="520" height="250" rx="14" fill="#fff7ed" stroke="#f59e0b" stroke-width="2"/>
+  <text x="114" y="218" fill="#92400e" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="26" font-weight="700">Warning</text>
+  <text x="114" y="260" fill="#5b4636" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="18">低频端 fl = 0.01 Hz 导致单次 EIS 很长</text>
+  <text x="114" y="294" fill="#5b4636" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="18">EIS 插入过密，恒流过程被频繁打断</text>
+  <text x="114" y="328" fill="#5b4636" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="18">补偿累计时间过大，后续工步明显拉长</text>
+  <text x="114" y="362" fill="#5b4636" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="18">SoC 预测可能提前耗尽并丢失后续点位</text>
+
+  <rect x="686" y="166" width="520" height="250" rx="14" fill="#fef2f2" stroke="#ef4444" stroke-width="2"/>
+  <text x="726" y="218" fill="#991b1b" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="26" font-weight="700">Error</text>
+  <text x="726" y="260" fill="#5f3636" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="18">缺少必要工步或脉冲参数</text>
+  <text x="726" y="294" fill="#5f3636" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="18">数值无法解析或超出可执行范围</text>
+  <text x="726" y="328" fill="#5f3636" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="18">方向、电压、时间点组合无法形成合法计划</text>
+  <text x="726" y="362" fill="#5f3636" font-family="Segoe UI, Microsoft YaHei, sans-serif" font-size="18">复制按钮禁用，必须修正后才能生成</text>
+</svg>
