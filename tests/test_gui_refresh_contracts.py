@@ -13,12 +13,28 @@ from chi_generator.ui.presets import PresetFileService
 def test_export_directory_change_refreshes_script_preview(qt_app) -> None:
     app, window = build_application()
     try:
-        new_export_dir = str(Path(r"C:\Users\chs\Desktop\OPEISMaster") / "chi-out")
+        new_export_dir = str(Path(r"C:\CHI\OPEIS") / "chi-out")
         window.export_dir_edit.setText(new_export_dir)
         QTest.qWait(120)
         app.processEvents()
         expected_folder_line = f"folder={window.export_dir_edit.text()}".replace("/", "\\")
         assert expected_folder_line in window.output_panel.minimal_editor.toPlainText()
+    finally:
+        window.close()
+
+
+def test_default_export_directory_preview_does_not_expose_user_home(qt_app) -> None:
+    app, window = build_application()
+    try:
+        QTest.qWait(120)
+        app.processEvents()
+        minimal_script = window.output_panel.minimal_editor.toPlainText()
+        summary_text = window.output_panel.summary_label.text()
+        home_text = str(Path.home()).replace("/", "\\")
+        assert "folder=." in minimal_script
+        assert "导出目录：." in summary_text
+        assert home_text not in minimal_script
+        assert home_text not in summary_text
     finally:
         window.close()
 

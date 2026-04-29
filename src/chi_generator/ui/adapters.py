@@ -91,8 +91,12 @@ class GuiBackend:
         return ProjectConfig(
             scheme_name=state.scheme_name,
             file_prefix=state.file_prefix,
-            export_dir=Path(state.export_dir or ".").resolve(),
+            export_dir=self._build_export_dir(state.export_dir),
         )
+
+    def _build_export_dir(self, export_dir: str) -> Path:
+        text = export_dir.strip()
+        return Path(text) if text else Path(".")
 
     def _build_battery(self, state: GuiState) -> BatteryConfig:
         return BatteryConfig(
