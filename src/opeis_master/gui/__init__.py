@@ -1,6 +1,5 @@
-"""GUI package for OPEIS Master."""
+"""Compatibility exports for the current GUI."""
 
 from .main_window import MainWindow
-from .models import Issue, ScriptBundle
 
-__all__ = ["Issue", "MainWindow", "ScriptBundle"]
+__all__ = ["MainWindow"]

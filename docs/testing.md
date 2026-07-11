@@ -9,12 +9,12 @@ $env:QT_QPA_PLATFORM="offscreen"
 
 ## 当前覆盖
 
-共计 **59 个测试**，全部通过。覆盖范围：
+测试数量以当前命令输出为准，避免文档中的固定数字过期。测试覆盖：
 
 ### Domain 层
 - 电流换算（material / reference basis）
 - 时间点展开（segmented / fixed / manual 模式）
-- 电压点展开（linear / log / sqrt / manual 间距）
+- 电压点展开（linear / manual 间距）
 - 中断补偿与 CTC 等效容量补偿
 - SoC 轨迹模拟与耗尽检测
 - CTC 推荐取点规划
@@ -53,3 +53,13 @@ $env:QT_QPA_PLATFORM="offscreen"
 
 ### 兼容层
 - `opeis_master` 旧契约测试
+
+## 推荐验收命令
+
+```powershell
+$env:QT_QPA_PLATFORM="offscreen"
+python -m pytest -q
+python -m pytest -q --cov=chi_generator --cov-report=term-missing
+```
+
+覆盖率门槛为 80%。GUI 测试使用离屏模式；完整测试耗时会受到 PySide6 启动和机器性能影响。

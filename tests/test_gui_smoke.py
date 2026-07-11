@@ -1,7 +1,11 @@
 from __future__ import annotations
 
-from opeis_master.core.service import ScriptGenerationService
-from opeis_master.gui.main_window import MainWindow
+import pytest
+
+from chi_generator.domain.service import ScriptGenerationService
+from chi_generator.ui.main_window import MainWindow
+
+pytestmark = pytest.mark.gui
 
 
 def test_main_window_smoke(qt_app) -> None:

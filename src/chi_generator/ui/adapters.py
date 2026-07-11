@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from chi_generator.domain.calculations import resolve_current
 from chi_generator.domain.models import (
     BatteryConfig,
@@ -12,6 +14,10 @@ from chi_generator.domain.models import (
     CurrentBasisMode,
     CurrentInputMode,
     CurrentSetpointConfig,
+    DodCapacityBasis,
+    DodPointConfig,
+    DodPointPhase,
+    EisInitStrategy,
     ExperimentRequest,
     ExperimentSequenceRequest,
     ImpedanceConfig,
@@ -47,8 +53,8 @@ from .models import (
     VoltageInputUiMode,
     WorkspaceMode,
 )
-from .parsers import parse_float, parse_int
-from .planning import parse_float_list
+from .errors import GuiFieldError
+from .parsers import parse_float, parse_float_list_strict, parse_int
 
 
 @dataclass(slots=True)
@@ -60,21 +66,32 @@ class GuiBackend:
             self.service = ScriptGenerationService()
 
     def preview(self, state: GuiState):
-        validated = self._validate_state(state)
-        return self.service.generate(self._build_request(validated))
+        try:
+            validated = self._validate_state(state)
+            return self.service.generate(self._build_request(validated))
+        except ValidationError as exc:
+            raise self._field_error(exc) from exc
 
     def resolve_current_preview(self, state: GuiState, phase_index: int = 0) -> tuple[float, float, float]:
-        validated = self._validate_state(state)
-        battery = self._build_battery(validated.draft)
-        current_basis = self._build_current_basis(validated.draft)
-        controlled = [phase.phase for phase in validated.phases if phase.phase.phase_kind is not PhaseUiKind.REST]
-        if controlled:
-            phase = controlled[min(max(phase_index, 0), len(controlled) - 1)]
-            setpoint = self._build_current_setpoint(phase.current_mode, phase.rate_c, phase.current_a)
-        else:
-            setpoint = CurrentSetpointConfig(mode=CurrentInputMode.RATE, rate_c=0.1)
-        resolution = resolve_current(battery, current_basis, setpoint)
-        return resolution.one_c_current_a, resolution.operating_current_a, resolution.operating_rate_c
+        try:
+            validated = self._validate_state(state)
+            battery = self._build_battery(validated.draft)
+            current_basis = self._build_current_basis(validated.draft)
+            controlled = [phase.phase for phase in validated.phases if phase.phase.phase_kind is not PhaseUiKind.REST]
+            if controlled:
+                phase = controlled[min(max(phase_index, 0), len(controlled) - 1)]
+                setpoint = self._build_current_setpoint(phase.current_mode, phase.rate_c, phase.current_a)
+            else:
+                setpoint = CurrentSetpointConfig(mode=CurrentInputMode.RATE, rate_c=0.1)
+            resolution = resolve_current(battery, current_basis, setpoint)
+            return resolution.one_c_current_a, resolution.operating_current_a, resolution.operating_rate_c
+        except ValidationError as exc:
+            raise self._field_error(exc) from exc
+
+    def _field_error(self, exc: ValidationError) -> GuiFieldError:
+        detail = exc.errors(include_url=False)[0]
+        field = ".".join(str(part) for part in detail.get("loc", ())) or "输入参数"
+        return GuiFieldError(field, str(detail.get("msg", "输入参数无效")))
 
     def _validate_state(self, state: GuiState) -> GuiValidatedState:
         return GuiValidatedState(
@@ -155,7 +172,17 @@ class GuiBackend:
         if state.phase_kind is PhaseUiKind.TIME_POINTS:
             payload["time_points"] = self._build_time_points(state)
             return TimePointPhase.model_validate(payload)
+        if state.phase_kind is PhaseUiKind.DOD_POINTS:
+            payload["post_trigger_rest_s"] = parse_float(state.post_trigger_rest_s, field_label="触发后静置")
+            payload["dod_points"] = self._build_dod_points(state)
+            return DodPointPhase.model_validate(payload)
         payload["voltage_points"] = self._build_voltage_points(state)
+        payload["eis_init_strategy"] = EisInitStrategy(state.eis_init_strategy)
+        payload["post_trigger_rest_s"] = parse_float(state.post_trigger_rest_s, field_label="触发后静置")
+        if state.eis_init_strategy is EisInitStrategy.MANUAL:
+            payload["manual_init_e_v"] = parse_float(state.manual_init_e_v, field_label="手动 EIS 初始电位")
+        if state.estimated_loaded_start_v.strip():
+            payload["estimated_loaded_start_v"] = parse_float(state.estimated_loaded_start_v, field_label="预计瞬时负载电压")
         return VoltagePointPhase.model_validate(payload)
 
     def _build_current_setpoint(self, mode: CurrentInputUiMode, rate_text: str, current_text: str) -> CurrentSetpointConfig:
@@ -170,7 +197,17 @@ class GuiBackend:
             end_v=parse_float(state.voltage_end_v, field_label="结束电压"),
             step_v=parse_float(state.voltage_step_v, field_label="电压步长"),
             spacing_mode=spacing_mode,
-            manual_points_v=parse_float_list(state.voltage_manual_points_text),
+            manual_points_v=parse_float_list_strict(state.voltage_manual_points_text, field_label="电压列表"),
+        )
+
+    def _build_dod_points(self, state: GuiPhaseState) -> DodPointConfig:
+        reference_capacity = None
+        if state.dod_capacity_basis is not DodCapacityBasis.THEORETICAL:
+            reference_capacity = parse_float(state.dod_reference_capacity_mah, field_label="DOD 参考容量")
+        return DodPointConfig(
+            dod_points_percent=parse_float_list_strict(state.dod_points_text, field_label="DOD 列表"),
+            capacity_basis=DodCapacityBasis(state.dod_capacity_basis),
+            reference_capacity_mah=reference_capacity,
         )
 
     def _build_time_points(self, state: GuiPhaseState) -> TimePointConfig:
@@ -193,7 +230,7 @@ class GuiBackend:
             "estimated_eis_duration_s": None,
         }
         if sampling_mode is SamplingMode.MANUAL:
-            payload["manual_points_minutes"] = parse_float_list(state.manual_points_text)
+            payload["manual_points_minutes"] = parse_float_list_strict(state.manual_points_text, field_label="时间列表")
         elif sampling_mode is SamplingMode.FIXED:
             payload["total_duration_minutes"] = parse_float(state.fixed_total_duration_min, field_label="总时长")
             if state.fixed_mode is FixedTimeUiMode.INTERVAL:
@@ -241,11 +278,11 @@ class GuiBackend:
                 end_v=1.5,
                 step_v=0.1,
                 spacing_mode=SpacingMode.MANUAL,
-                manual_points_v=parse_float_list(state.pulse_tail_manual_points_text),
+                manual_points_v=parse_float_list_strict(state.pulse_tail_manual_points_text, field_label="追加段电压列表"),
             ),
             tail_voltage_window=VoltageWindowConfig(
-                upper_v=max(parse_float_list(state.pulse_tail_manual_points_text) or [parse_float(state.pulse_upper_voltage_v, field_label="脉冲上限电压")]),
-                lower_v=min(parse_float_list(state.pulse_tail_manual_points_text) or [parse_float(state.pulse_lower_voltage_v, field_label="脉冲下限电压")]),
+                upper_v=max(parse_float_list_strict(state.pulse_tail_manual_points_text, field_label="追加段电压列表") or [parse_float(state.pulse_upper_voltage_v, field_label="脉冲上限电压")]),
+                lower_v=min(parse_float_list_strict(state.pulse_tail_manual_points_text, field_label="追加段电压列表") or [parse_float(state.pulse_lower_voltage_v, field_label="脉冲下限电压")]),
             ),
             tail_sample_interval_s=parse_float(state.pulse_tail_sample_interval_s, field_label="追加段采样间隔"),
             tail_insert_eis_after_each_point=state.pulse_tail_insert_eis,

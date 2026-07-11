@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from .calculations import IMPFT_BASELINE_S, estimate_eis_scan_duration_s, plan_time_points, plan_voltage_points, resolve_current
+from .calculations import IMPFT_BASELINE_S, estimate_eis_scan_duration_s, plan_dod_points, plan_time_points, plan_voltage_points, resolve_current, resolve_sequence_capacity_ah
 from .models import (
+    DodPointPhase,
+    EisInitStrategy,
     ExperimentRequest,
     ExperimentSequenceRequest,
     ImpedanceMeasurementMode,
@@ -46,7 +48,19 @@ def validate_sequence_request(request: ExperimentSequenceRequest) -> ValidationR
     total_progress_s = 0.0
     total_simulated_discharge_ah = 0.0
     estimated_eis_duration_s = estimate_eis_scan_duration_s(request.impedance_defaults)
-    capacity_ah = 0.0
+    try:
+        capacity_ah = resolve_sequence_capacity_ah(request)
+    except ValueError as exc:
+        errors.append(
+            ValidationIssue(
+                severity=Severity.ERROR,
+                code="inconsistent_dod_capacity_basis",
+                field="phases",
+                message=str(exc),
+                risk_level=RiskLevel.BLOCKING,
+            )
+        )
+        return ValidationResult(errors=errors, warnings=warnings)
 
     for index, phase in enumerate(request.phases, start=1):
         field = f"phases[{index - 1}]"
@@ -56,8 +70,6 @@ def validate_sequence_request(request: ExperimentSequenceRequest) -> ValidationR
                 continue
 
             resolution = resolve_current(request.battery, request.current_basis, phase.current_setpoint)
-            capacity_ah = max(capacity_ah, resolution.one_c_current_a)
-
             if previous_direction is not None and previous_direction is not phase.direction:
                 direction_switches += 1
             previous_direction = phase.direction
@@ -73,14 +85,101 @@ def validate_sequence_request(request: ExperimentSequenceRequest) -> ValidationR
                 total_compensation_s += plan.compensation_total * 60.0
                 if phase.direction.value == "discharge":
                     total_simulated_discharge_ah += resolution.operating_current_a * (phase_progress_s / 3600.0)
-                    if phase.insert_eis_after_each_point:
-                        total_simulated_discharge_ah += resolution.operating_current_a * (len(plan.points) * estimated_eis_duration_s / 3600.0)
                 if phase.insert_eis_after_each_point:
                     total_eis_points += len(plan.points)
+            elif isinstance(phase, DodPointPhase):
+                plan = plan_dod_points(phase.dod_points, battery=request.battery, current_a=resolution.operating_current_a)
+                phase_progress_s = (plan.actual_points[-1] * 60.0) if plan.actual_points else 0.0
+                total_progress_s += phase_progress_s
+                if phase.direction.value == "discharge":
+                    total_simulated_discharge_ah += resolution.operating_current_a * (phase_progress_s / 3600.0)
+                if phase.insert_eis_after_each_point:
+                    total_eis_points += len(plan.points)
+                warnings.append(
+                    ValidationIssue(
+                        severity=Severity.INFO,
+                        code="dod_planned_capacity_basis",
+                        field=field,
+                        message="DOD checkpoints are planned from the selected capacity basis; correct actual DOD during post-processing with measured capacity.",
+                        risk_level=RiskLevel.LOW,
+                    )
+                )
+                if any(point >= 100 for point in plan.points):
+                    warnings.append(
+                        ValidationIssue(
+                            severity=Severity.INFO,
+                            code="dod_cutoff_limit",
+                            field=field,
+                            message="100% DOD may be limited by cutoff voltage before the planned capacity is reached.",
+                            hint="Consider stopping at 80% DOD or saving a separate cutoff-state checkpoint.",
+                            risk_level=RiskLevel.LOW,
+                        )
+                    )
             elif isinstance(phase, VoltagePointPhase):
                 plan = plan_voltage_points(phase.voltage_points, direction=phase.direction)
                 if max(plan.points) > phase.voltage_window.upper_v or min(plan.points) < phase.voltage_window.lower_v:
                     raise ValueError("voltage points must remain within the configured safety voltage window")
+                if phase.insert_eis_after_each_point and phase.eis_init_strategy is EisInitStrategy.TARGET_VOLTAGE:
+                    if phase.direction.value == "discharge" and phase.estimated_loaded_start_v is not None:
+                        unreachable_points = [point for point in plan.points if point > phase.estimated_loaded_start_v]
+                        if unreachable_points:
+                            warnings.append(
+                                ValidationIssue(
+                                    severity=Severity.WARNING,
+                                    code="target_voltage_unreachable",
+                                    field=field,
+                                    message="Some target-voltage PEIS checkpoints may be crossed immediately by the initial polarization drop.",
+                                    hint=(
+                                        f"First risky point {unreachable_points[0]:g} V is above estimated loaded voltage "
+                                        f"{phase.estimated_loaded_start_v:g} V; remove it, lower approach current, or use DOD/eio mode."
+                                    ),
+                                    risk_level=RiskLevel.HIGH,
+                                )
+                            )
+                    if phase.post_trigger_rest_s > 60:
+                        warnings.append(
+                            ValidationIssue(
+                                severity=Severity.WARNING,
+                                code="target_voltage_long_rest",
+                                field=field,
+                                message="Long external rest before ei=target may force the cell back to the target voltage and alter state.",
+                                hint="For target-voltage PEIS, keep post-trigger rest <= 60 s and usually 0-10 s.",
+                                risk_level=RiskLevel.HIGH,
+                            )
+                        )
+                    if request.impedance_defaults.low_frequency_hz <= 0.1 and len(plan.points) >= 4:
+                        warnings.append(
+                            ValidationIssue(
+                                severity=Severity.WARNING,
+                                code="target_voltage_dense_low_frequency",
+                                field=field,
+                                message="Dense low-frequency target-voltage PEIS can drift the battery state during the run.",
+                                hint="Use fewer voltage points, a higher low-frequency limit, or DOD/eio mode.",
+                                risk_level=RiskLevel.HIGH,
+                            )
+                        )
+                if phase.insert_eis_after_each_point and phase.eis_init_strategy is EisInitStrategy.OPEN_CIRCUIT:
+                    severity = Severity.INFO
+                    risk_level = RiskLevel.LOW
+                    code = "voltage_trigger_eio_meaning"
+                    message = "Voltage checkpoints are only CP triggers; EIS is measured near relaxed OCV after rest."
+                    hint = "Use this wording when interpreting results, not fixed target-voltage PEIS."
+                    if phase.post_trigger_rest_s >= 300 and len(plan.points) >= 6:
+                        severity = Severity.WARNING
+                        risk_level = RiskLevel.MEDIUM
+                        code = "voltage_trigger_eio_many_long_rest"
+                        message = "Many voltage-triggered eio checkpoints with long rest will include relaxation and re-polarization history."
+                        hint = "Consider DOD checkpoints or parallel cells for cleaner comparisons."
+                    warnings.append(
+                        ValidationIssue(
+                            severity=severity,
+                            code=code,
+                            field=field,
+                            message=message,
+                            hint=hint,
+                            risk_level=risk_level,
+                        )
+                    )
                 if phase.insert_eis_after_each_point:
                     total_eis_points += len(plan.points)
                     if phase.direction.value == "discharge":

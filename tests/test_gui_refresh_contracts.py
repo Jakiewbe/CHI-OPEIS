@@ -2,12 +2,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from PySide6.QtTest import QTest
 
 from chi_generator.app import build_application
+from chi_generator.domain.models import EisInitStrategy
 from chi_generator.ui.main_window import MainWindow
 from chi_generator.ui.models import PhaseUiKind, WorkspaceMode
 from chi_generator.ui.presets import PresetFileService
+
+pytestmark = pytest.mark.gui
 
 
 def test_export_directory_change_refreshes_script_preview(qt_app) -> None:
@@ -68,7 +73,7 @@ def test_charge_voltage_workstep_uses_range_inputs(qt_app) -> None:
         app.processEvents()
         assert "3" in row.point_count_label.text()
         assert "ic=-0.0000865" in window.output_panel.minimal_editor.toPlainText()
-        assert "save=CHI_S01_CC_3.20V" in window.output_panel.minimal_editor.toPlainText()
+        assert "save=CHI_S01_CC_3p20V" in window.output_panel.minimal_editor.toPlainText()
         assert window._last_bundle is not None
         assert window._last_bundle.phase_plans[0].effective_points == [2.8, 3.0, 3.2]
     finally:
@@ -87,7 +92,7 @@ def test_non_divisible_voltage_range_still_generates_preview(qt_app) -> None:
         app.processEvents()
         assert window._last_bundle is not None
         assert window._last_bundle.phase_plans[0].effective_points[-1] == 2.55
-        assert "save=CHI_S01_CC_2.55V" in window.output_panel.minimal_editor.toPlainText()
+        assert "save=CHI_S01_CC_2p55V" in window.output_panel.minimal_editor.toPlainText()
     finally:
         window.close()
 
@@ -195,6 +200,74 @@ def test_workstep_editor_supports_add_move_and_delete(qt_app) -> None:
         QTest.qWait(120)
         app.processEvents()
         assert [row.collect_state().phase_kind.value for row in window.phase_editors] == ["time_points", "voltage_points"]
+    finally:
+        window.close()
+
+
+def test_three_eis_mode_template_buttons_create_expected_phase_defaults(qt_app) -> None:
+    app, window = build_application()
+    try:
+        window.add_target_peis_button.click()
+        window.add_relax_eis_button.click()
+        window.add_dod_phase_button.click()
+        QTest.qWait(120)
+        app.processEvents()
+
+        states = [row.collect_state() for row in window.phase_editors]
+        target = states[1]
+        relaxed = states[2]
+        dod = states[3]
+        assert target.phase_kind is PhaseUiKind.VOLTAGE_POINTS
+        assert target.eis_init_strategy is EisInitStrategy.TARGET_VOLTAGE
+        assert "3.0" not in target.voltage_manual_points_text
+        assert target.post_trigger_rest_s == "5"
+        assert relaxed.phase_kind is PhaseUiKind.VOLTAGE_POINTS
+        assert relaxed.eis_init_strategy is EisInitStrategy.OPEN_CIRCUIT
+        assert relaxed.post_trigger_rest_s == "300"
+        assert dod.phase_kind is PhaseUiKind.DOD_POINTS
+        assert dod.dod_points_text == "20\n40\n60\n80\n100"
+        assert dod.post_trigger_rest_s == "300"
+    finally:
+        window.close()
+
+
+def test_dod_template_renders_incremental_durations_from_gui(qt_app) -> None:
+    app, window = build_application()
+    try:
+        window.add_dod_phase_button.click()
+        QTest.qWait(120)
+        app.processEvents()
+        minimal = window.output_panel.minimal_editor.toPlainText()
+        assert window._last_bundle is not None
+        assert window._last_bundle.can_generate is True
+        assert minimal.count("st1=7200") == 5
+        assert "save=CHI_S02_EIS_DOD20P" in minimal
+    finally:
+        window.close()
+
+
+def test_dod_editor_shows_only_dod_relevant_fields(qt_app) -> None:
+    app, window = build_application()
+    try:
+        window.show()
+        window.add_dod_phase_button.click()
+        QTest.qWait(120)
+        app.processEvents()
+
+        row = window.phase_editors[1]
+        assert row.collect_state().phase_kind is PhaseUiKind.DOD_POINTS
+        assert row.eis_strategy_field.isVisible() is False
+        assert row.manual_init_e_field.isVisible() is False
+        assert row.estimated_loaded_start_field.isVisible() is False
+        assert row.post_trigger_rest_field.isVisible() is True
+        assert row.dod_row.isVisible() is True
+        assert row.dod_points_status.text() == "5 个值"
+        assert row.dod_reference_capacity_field.isVisible() is False
+
+        row.dod_capacity_basis_combo.setCurrentIndex(row.dod_capacity_basis_combo.findData("user_reference"))
+        QTest.qWait(80)
+        app.processEvents()
+        assert row.dod_reference_capacity_field.isVisible() is True
     finally:
         window.close()
 
@@ -344,6 +417,49 @@ def test_old_preset_modes_are_downgraded_on_load(qt_app) -> None:
         window.load_preset_from_path(preset_path)
         qt_app.processEvents()
         assert window.mode_combo.currentData() == WorkspaceMode.PULSE.value
+    finally:
+        window.close()
+
+
+def test_old_voltage_preset_defaults_to_target_voltage_strategy(qt_app) -> None:
+    recent_store = Path.cwd() / ".pytest-artifacts" / "recent_presets_voltage_compat.json"
+    preset_path = Path.cwd() / ".pytest-artifacts" / "voltage_compat.chi-preset"
+    recent_store.parent.mkdir(parents=True, exist_ok=True)
+    preset_path.write_text(
+        """
+        {
+          "version": 4,
+          "workspace_mode": "sequence",
+          "state": {
+            "workspace_mode": "sequence",
+            "scheme_name": "compat",
+            "file_prefix": "CHI",
+            "export_dir": "",
+            "active_material_mg": "1",
+            "theoretical_capacity_mah_mg": "865",
+            "workflow_items": [
+              {
+                "label": "旧电压工步",
+                "phase_kind": "voltage_points",
+                "direction": "discharge",
+                "voltage_start_v": "3.2",
+                "voltage_end_v": "3.0",
+                "voltage_step_v": "0.1"
+              }
+            ]
+          }
+        }
+        """,
+        encoding="utf-8",
+    )
+    window = MainWindow(preset_service=PresetFileService(recent_store_path=recent_store))
+    try:
+        window.load_preset_from_path(preset_path)
+        qt_app.processEvents()
+        state = window.phase_editors[0].collect_state()
+        assert state.eis_init_strategy is EisInitStrategy.TARGET_VOLTAGE
+        assert state.post_trigger_rest_s == "0"
+        assert "ei=3.2" in window.output_panel.minimal_editor.toPlainText()
     finally:
         window.close()
 

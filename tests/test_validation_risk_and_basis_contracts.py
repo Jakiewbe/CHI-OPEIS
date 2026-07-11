@@ -10,6 +10,9 @@ from chi_generator.domain import (
     CurrentBasisMode,
     CurrentInputMode,
     CurrentSetpointConfig,
+    DodPointConfig,
+    DodPointPhase,
+    EisInitStrategy,
     ExperimentSequenceRequest,
     ImpedanceConfig,
     ImpedanceMeasurementMode,
@@ -155,3 +158,105 @@ def test_impsf_dense_low_frequency_warns_without_blocking() -> None:
     assert result.can_generate is True
     warning = next(issue for issue in result.warnings if issue.code == "impsf_slow_dense_eis")
     assert warning.risk_level is RiskLevel.HIGH
+
+
+def test_target_voltage_peis_warns_when_target_above_loaded_start() -> None:
+    request = ExperimentSequenceRequest(
+        project=ProjectConfig(scheme_name="demo", file_prefix="demo", export_dir=Path.cwd()),
+        battery=BatteryConfig(active_material_mg=1.0, theoretical_capacity_mah_mg=865.0),
+        current_basis=CurrentBasisConfig(mode=CurrentBasisMode.MATERIAL),
+        impedance_defaults=ImpedanceConfig(low_frequency_hz=1.0),
+        phases=[
+            VoltagePointPhase(
+                label="target-peis",
+                direction=ProcessDirection.DISCHARGE,
+                current_setpoint=CurrentSetpointConfig(mode=CurrentInputMode.RATE, rate_c=0.1),
+                voltage_window=VoltageWindowConfig(upper_v=3.2, lower_v=1.5),
+                sampling=SamplingConfig(pre_wait_s=0, sample_interval_s=1),
+                voltage_points=VoltagePointConfig(start_v=3.0, end_v=2.6, step_v=0.2),
+                eis_init_strategy=EisInitStrategy.TARGET_VOLTAGE,
+                estimated_loaded_start_v=2.7,
+            )
+        ],
+    )
+
+    result = validate_sequence_request(request)
+
+    warning = next(issue for issue in result.warnings if issue.code == "target_voltage_unreachable")
+    assert warning.risk_level is RiskLevel.HIGH
+
+
+def test_target_voltage_peis_warns_for_long_rest_and_dense_low_frequency() -> None:
+    request = ExperimentSequenceRequest(
+        project=ProjectConfig(scheme_name="demo", file_prefix="demo", export_dir=Path.cwd()),
+        battery=BatteryConfig(active_material_mg=1.0, theoretical_capacity_mah_mg=865.0),
+        current_basis=CurrentBasisConfig(mode=CurrentBasisMode.MATERIAL),
+        impedance_defaults=ImpedanceConfig(low_frequency_hz=0.1),
+        phases=[
+            VoltagePointPhase(
+                label="target-peis",
+                direction=ProcessDirection.DISCHARGE,
+                current_setpoint=CurrentSetpointConfig(mode=CurrentInputMode.RATE, rate_c=0.1),
+                voltage_window=VoltageWindowConfig(upper_v=3.2, lower_v=1.5),
+                sampling=SamplingConfig(pre_wait_s=0, sample_interval_s=1),
+                voltage_points=VoltagePointConfig(start_v=3.2, end_v=2.8, step_v=0.1),
+                eis_init_strategy=EisInitStrategy.TARGET_VOLTAGE,
+                post_trigger_rest_s=120,
+            )
+        ],
+    )
+
+    result = validate_sequence_request(request)
+
+    assert next(issue for issue in result.warnings if issue.code == "target_voltage_long_rest").risk_level is RiskLevel.HIGH
+    assert next(issue for issue in result.warnings if issue.code == "target_voltage_dense_low_frequency").risk_level is RiskLevel.HIGH
+
+
+def test_voltage_trigger_eio_is_info_by_default() -> None:
+    request = ExperimentSequenceRequest(
+        project=ProjectConfig(scheme_name="demo", file_prefix="demo", export_dir=Path.cwd()),
+        battery=BatteryConfig(active_material_mg=1.0, theoretical_capacity_mah_mg=865.0),
+        current_basis=CurrentBasisConfig(mode=CurrentBasisMode.MATERIAL),
+        impedance_defaults=ImpedanceConfig(low_frequency_hz=1.0),
+        phases=[
+            VoltagePointPhase(
+                label="relaxed",
+                direction=ProcessDirection.DISCHARGE,
+                current_setpoint=CurrentSetpointConfig(mode=CurrentInputMode.RATE, rate_c=0.1),
+                voltage_window=VoltageWindowConfig(upper_v=3.2, lower_v=1.5),
+                sampling=SamplingConfig(pre_wait_s=0, sample_interval_s=1),
+                voltage_points=VoltagePointConfig(start_v=3.0, end_v=2.8, step_v=0.2),
+                eis_init_strategy=EisInitStrategy.OPEN_CIRCUIT,
+                post_trigger_rest_s=300,
+            )
+        ],
+    )
+
+    result = validate_sequence_request(request)
+
+    issue = next(issue for issue in result.warnings if issue.code == "voltage_trigger_eio_meaning")
+    assert issue.severity.value == "info"
+
+
+def test_dod_warns_about_capacity_basis_and_cutoff_limit() -> None:
+    request = ExperimentSequenceRequest(
+        project=ProjectConfig(scheme_name="demo", file_prefix="demo", export_dir=Path.cwd()),
+        battery=BatteryConfig(active_material_mg=1.0, theoretical_capacity_mah_mg=865.0),
+        current_basis=CurrentBasisConfig(mode=CurrentBasisMode.MATERIAL),
+        impedance_defaults=ImpedanceConfig(low_frequency_hz=1.0),
+        phases=[
+            DodPointPhase(
+                label="dod",
+                direction=ProcessDirection.DISCHARGE,
+                current_setpoint=CurrentSetpointConfig(mode=CurrentInputMode.RATE, rate_c=0.1),
+                voltage_window=VoltageWindowConfig(upper_v=3.2, lower_v=1.5),
+                sampling=SamplingConfig(pre_wait_s=0, sample_interval_s=1),
+                dod_points=DodPointConfig(dod_points_percent=[20, 100]),
+            )
+        ],
+    )
+
+    result = validate_sequence_request(request)
+
+    assert next(issue for issue in result.warnings if issue.code == "dod_planned_capacity_basis").severity.value == "info"
+    assert next(issue for issue in result.warnings if issue.code == "dod_cutoff_limit").severity.value == "info"

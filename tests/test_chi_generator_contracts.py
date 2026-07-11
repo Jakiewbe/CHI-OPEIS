@@ -10,6 +10,10 @@ from chi_generator.domain.models import (
     CurrentBasisMode,
     CurrentInputMode,
     CurrentSetpointConfig,
+    DodCapacityBasis,
+    DodPointConfig,
+    DodPointPhase,
+    EisInitStrategy,
     ExperimentRequest,
     ExperimentSequenceRequest,
     ImpedanceConfig,
@@ -23,6 +27,7 @@ from chi_generator.domain.models import (
     SamplingConfig,
     ScriptKind,
     SequenceScriptBundle,
+    SpacingMode,
     TimeBasisMode,
     TimePointConfig,
     TimePointPhase,
@@ -92,8 +97,8 @@ def test_voltage_range_generation_expands_points_and_renders_cp_blocks() -> None
     assert "eh=3.2\nel=3.1" in bundle.minimal_script
     assert "tc=100000" in bundle.minimal_script
     assert "pn=n" in bundle.minimal_script
-    assert "save=DEMO_S01_CC_3.20V" in bundle.minimal_script
-    assert "save=DEMO_S01_EIS_3.00V" in bundle.minimal_script
+    assert "save=DEMO_S01_CC_3p20V" in bundle.minimal_script
+    assert "save=DEMO_S01_EIS_3p00V" in bundle.minimal_script
 
 
 def test_charge_voltage_range_renders_target_as_cp_upper_limit() -> None:
@@ -180,7 +185,7 @@ def test_charge_then_rest_then_discharge_render_independently() -> None:
     assert "ic=0.0000865" in bundle.minimal_script
     assert "delay=30" in bundle.minimal_script
     assert "save=DEMO_S01_CC_T5M" in bundle.minimal_script
-    assert "save=DEMO_S03_CC_3.20V" in bundle.minimal_script
+    assert "save=DEMO_S03_CC_3p20V" in bundle.minimal_script
 
 
 def test_compensation_only_affects_current_time_step() -> None:
@@ -331,6 +336,145 @@ def test_impedance_measurement_mode_renders_ft_or_sf() -> None:
     assert "impft" not in sf_bundle.minimal_script
 
 
+def test_voltage_point_eis_init_strategy_can_use_open_circuit_or_manual() -> None:
+    open_circuit_request = _base_sequence_request(
+        [
+            VoltagePointPhase(
+                label="Relaxed voltage",
+                direction=ProcessDirection.DISCHARGE,
+                current_setpoint=_rate_setpoint(0.1),
+                voltage_window=_voltage_window(),
+                sampling=SamplingConfig(pre_wait_s=0.0, sample_interval_s=1.0),
+                voltage_points=VoltagePointConfig(spacing_mode=SpacingMode.MANUAL, manual_points_v=[3.2]),
+                eis_init_strategy=EisInitStrategy.OPEN_CIRCUIT,
+                post_trigger_rest_s=300,
+            )
+        ]
+    )
+
+    open_bundle = ScriptGenerationService().generate(open_circuit_request)
+
+    assert open_bundle.can_generate is True
+    assert "delay=300" in open_bundle.minimal_script
+    assert "save=DEMO_S01_EIS_3p20V" in open_bundle.minimal_script
+    eis_block = open_bundle.minimal_script.split("save=DEMO_S01_EIS_3p20V")[0].split("tech=imp")[-1]
+    assert "eio" in eis_block
+    assert "ei=3.2" not in eis_block
+
+    manual_request = open_circuit_request.model_copy(
+        update={
+            "phases": [
+                open_circuit_request.phases[0].model_copy(
+                    update={
+                        "eis_init_strategy": EisInitStrategy.MANUAL,
+                        "manual_init_e_v": 2.95,
+                        "post_trigger_rest_s": 0,
+                    }
+                )
+            ]
+        }
+    )
+    manual_bundle = ScriptGenerationService().generate(manual_request)
+
+    assert "ei=2.95" in manual_bundle.minimal_script
+
+
+def test_voltage_point_default_keeps_target_voltage_peis_for_old_callers() -> None:
+    bundle = ScriptGenerationService().generate(
+        _base_sequence_request(
+            [
+                VoltagePointPhase(
+                    label="Legacy voltage",
+                    direction=ProcessDirection.DISCHARGE,
+                    current_setpoint=_rate_setpoint(0.1),
+                    voltage_window=_voltage_window(),
+                    sampling=SamplingConfig(pre_wait_s=0.0, sample_interval_s=1.0),
+                    voltage_points=VoltagePointConfig(spacing_mode=SpacingMode.MANUAL, manual_points_v=[3.2]),
+                )
+            ]
+        )
+    )
+
+    assert "ei=3.2" in bundle.minimal_script
+
+
+def test_voltage_point_save_names_are_safe_for_dense_decimal_points() -> None:
+    bundle = ScriptGenerationService().generate(
+        _base_sequence_request(
+            [
+                VoltagePointPhase(
+                    label="Dense voltage",
+                    direction=ProcessDirection.DISCHARGE,
+                    current_setpoint=_rate_setpoint(0.1),
+                    voltage_window=_voltage_window(),
+                    sampling=SamplingConfig(pre_wait_s=0.0, sample_interval_s=1.0),
+                    voltage_points=VoltagePointConfig(
+                        spacing_mode=SpacingMode.MANUAL,
+                        manual_points_v=[3.20, 3.18, 3.16],
+                    ),
+                )
+            ]
+        )
+    )
+
+    save_names = [line.removeprefix("save=") for line in bundle.minimal_script.splitlines() if line.startswith("save=")]
+    assert "DEMO_S01_EIS_3p20V" in save_names
+    assert "DEMO_S01_EIS_3p18V" in save_names
+    assert "DEMO_S01_EIS_3p16V" in save_names
+    assert all("." not in name for name in save_names)
+    assert len({name.split(".", 1)[0].lower() for name in save_names}) == len(save_names)
+
+
+def test_dod_points_render_incremental_istep_durations() -> None:
+    bundle = ScriptGenerationService().generate(
+        _base_sequence_request(
+            [
+                DodPointPhase(
+                    label="DOD",
+                    direction=ProcessDirection.DISCHARGE,
+                    current_setpoint=_rate_setpoint(0.1),
+                    voltage_window=_voltage_window(),
+                    sampling=SamplingConfig(pre_wait_s=0.0, sample_interval_s=1.0),
+                    dod_points=DodPointConfig(dod_points_percent=[20, 40, 60]),
+                    post_trigger_rest_s=0,
+                )
+            ]
+        )
+    )
+
+    assert bundle.can_generate is True
+    assert bundle.phase_plans[0].effective_points == pytest.approx([20, 40, 60])
+    assert bundle.phase_plans[0].rendered_points == pytest.approx([120, 240, 360])
+    assert bundle.minimal_script.count("st1=7200") == 3
+    assert "st1=14400" not in bundle.minimal_script
+    assert "st1=21600" not in bundle.minimal_script
+
+
+def test_dod_points_support_absolute_current_and_reference_capacity() -> None:
+    bundle = ScriptGenerationService().generate(
+        _base_sequence_request(
+            [
+                DodPointPhase(
+                    label="DOD absolute",
+                    direction=ProcessDirection.DISCHARGE,
+                    current_setpoint=CurrentSetpointConfig(mode=CurrentInputMode.ABSOLUTE, current_a=0.0001),
+                    voltage_window=_voltage_window(),
+                    sampling=SamplingConfig(pre_wait_s=0.0, sample_interval_s=1.0),
+                    dod_points=DodPointConfig(
+                        dod_points_percent=[50],
+                        capacity_basis=DodCapacityBasis.USER_REFERENCE,
+                        reference_capacity_mah=1.0,
+                    ),
+                    post_trigger_rest_s=0,
+                )
+            ]
+        )
+    )
+
+    assert bundle.can_generate is True
+    assert "st1=18000" in bundle.minimal_script
+
+
 def test_legacy_fit_false_maps_to_impsf() -> None:
     config = ImpedanceConfig.model_validate({"fit": False, "use_open_circuit_init_e": True})
 
@@ -367,7 +511,7 @@ def test_pulse_tail_voltage_phase_renders_after_all_pulses() -> None:
     bundle = ScriptGenerationService().generate(request)
 
     assert bundle.can_generate is True
-    assert bundle.minimal_script.index("save=PTAIL_EIS_POST02") < bundle.minimal_script.index("save=PTAIL_TAIL_CC_3.20V")
-    assert "save=PTAIL_TAIL_EIS_3.20V" in bundle.minimal_script
+    assert bundle.minimal_script.index("save=PTAIL_EIS_POST02") < bundle.minimal_script.index("save=PTAIL_TAIL_CC_3p20V")
+    assert "save=PTAIL_TAIL_EIS_3p20V" in bundle.minimal_script
     save_lines = [line for line in bundle.minimal_script.splitlines() if line.startswith("save=")]
     assert len(save_lines) == len(set(save_lines))

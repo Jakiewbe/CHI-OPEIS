@@ -8,13 +8,16 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QCheckBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QSizePolicy, QSplitter, QStatusBar, QVBoxLayout, QWidget
 from qfluentwidgets import FluentIcon as FIF, LineEdit, MSFluentWindow, PrimaryPushButton, PushButton, ScrollArea, Theme, setTheme
 
-from chi_generator.domain.models import ImpedanceMeasurementMode, ProcessDirection, SamplingMode, ScriptBundle, ScriptKind, SequenceScriptBundle, Severity, ValidationIssue
+from chi_generator.domain.models import EisInitStrategy, ImpedanceMeasurementMode, ProcessDirection, RiskLevel, SamplingMode, ScriptBundle, ScriptKind, SequenceScriptBundle, Severity, ValidationIssue
 from chi_generator.ui.adapters import GuiBackend
+from chi_generator.ui.errors import GuiFieldError
+from chi_generator.ui.issue_list import IssueListWidget
 from chi_generator.ui.models import CurrentBasisUiMode, CurrentInputUiMode, GuiLoopState, GuiPhaseState, GuiState, PhaseUiKind, RelaxationUiMode, WorkflowItemState, WorkspaceMode, expand_workflow_items
 from chi_generator.ui.preview_chart import ScriptPreviewChart
 from chi_generator.ui.presets import PresetFileService
+from chi_generator.ui.script_output import ScriptOutputPanel
 from chi_generator.ui.planning import parse_float_list
-from chi_generator.ui.widgets import Card, GuidedManualPointDialog, IssueListWidget, LoopBlockWidget, NoWheelComboBox, PresetComboBox, ScriptOutputPanel, WorkstepEditorRow
+from chi_generator.ui.widgets import Card, GuidedManualPointDialog, LoopBlockWidget, NoWheelComboBox, PresetComboBox, WorkstepEditorRow
 
 
 class MainWindow(MSFluentWindow):
@@ -32,6 +35,8 @@ class MainWindow(MSFluentWindow):
         self._refresh_timer.timeout.connect(self.refresh_preview)
         self._updating_ui = False
         self._last_bundle: ScriptBundle | None = None
+        self._current_risk_fingerprint: tuple[tuple[str, str | None, str], ...] = ()
+        self._confirmed_risk_fingerprint: tuple[tuple[str, str | None, str], ...] = ()
         self._current_preset_path: Path | None = None
         self.phase_editors: list[WorkstepEditorRow] = []
         self.workflow_widgets: list[WorkstepEditorRow | LoopBlockWidget] = []
@@ -227,10 +232,16 @@ class MainWindow(MSFluentWindow):
         toolbar = QHBoxLayout()
         self.add_workstep_button = self._button("新增时间工步", card, primary=True)
         self.add_voltage_phase_button = self._button("新增电压工步", card)
+        self.add_target_peis_button = self._button("目标电压 PEIS", card)
+        self.add_relax_eis_button = self._button("电压弛豫 EIS", card)
+        self.add_dod_phase_button = self._button("DOD 准原位 EIS", card)
         self.add_rest_phase_button = self._button("新增静置工步", card)
         self.create_loop_button = self._button("创建循环块", card)
         toolbar.addWidget(self.add_workstep_button)
         toolbar.addWidget(self.add_voltage_phase_button)
+        toolbar.addWidget(self.add_target_peis_button)
+        toolbar.addWidget(self.add_relax_eis_button)
+        toolbar.addWidget(self.add_dod_phase_button)
         toolbar.addWidget(self.add_rest_phase_button)
         toolbar.addWidget(self.create_loop_button)
         toolbar.addStretch(1)
@@ -441,8 +452,12 @@ class MainWindow(MSFluentWindow):
         self.recent_presets_combo.currentIndexChanged.connect(self._open_selected_recent_preset)
         self.add_workstep_button.clicked.connect(lambda: self._append_phase(PhaseUiKind.TIME_POINTS))
         self.add_voltage_phase_button.clicked.connect(lambda: self._append_phase(PhaseUiKind.VOLTAGE_POINTS))
+        self.add_target_peis_button.clicked.connect(lambda: self._append_template_phase("target_peis"))
+        self.add_relax_eis_button.clicked.connect(lambda: self._append_template_phase("relax_eis"))
+        self.add_dod_phase_button.clicked.connect(lambda: self._append_template_phase("dod_eis"))
         self.add_rest_phase_button.clicked.connect(lambda: self._append_phase(PhaseUiKind.REST))
         self.create_loop_button.clicked.connect(self._create_loop_from_selection)
+        self.output_panel.confirm_risk_button.clicked.connect(self._confirm_high_risk)
 
     def _apply_defaults(self) -> None:
         self._apply_state(GuiState())
@@ -480,9 +495,39 @@ class MainWindow(MSFluentWindow):
         names = {
             PhaseUiKind.TIME_POINTS: "时间工步",
             PhaseUiKind.VOLTAGE_POINTS: "电压工步",
+            PhaseUiKind.DOD_POINTS: "DOD工步",
             PhaseUiKind.REST: "静置工步",
         }
         return GuiPhaseState(label=f"{names[kind]} {index}", phase_kind=kind)
+
+    def _make_template_phase(self, template: str, index: int) -> GuiPhaseState:
+        if template == "target_peis":
+            return GuiPhaseState(
+                label=f"目标电压 PEIS {index}",
+                phase_kind=PhaseUiKind.VOLTAGE_POINTS,
+                voltage_input_mode="manual",
+                voltage_manual_points_text="2.6\n2.4\n2.2\n2.0\n1.8\n1.5",
+                voltage_start_v="2.6",
+                voltage_end_v="1.5",
+                voltage_step_v="0.2",
+                eis_init_strategy=EisInitStrategy.TARGET_VOLTAGE,
+                post_trigger_rest_s="5",
+            )
+        if template == "relax_eis":
+            return GuiPhaseState(
+                label=f"电压弛豫 EIS {index}",
+                phase_kind=PhaseUiKind.VOLTAGE_POINTS,
+                voltage_input_mode="manual",
+                voltage_manual_points_text="3.0\n2.8\n2.6\n2.4\n2.2\n2.0\n1.8\n1.5",
+                eis_init_strategy=EisInitStrategy.OPEN_CIRCUIT,
+                post_trigger_rest_s="300",
+            )
+        return GuiPhaseState(
+            label=f"DOD 准原位 EIS {index}",
+            phase_kind=PhaseUiKind.DOD_POINTS,
+            dod_points_text="20\n40\n60\n80\n100",
+            post_trigger_rest_s="300",
+        )
 
     def _collect_workflow_items(self) -> list[WorkflowItemState]:
         items: list[WorkflowItemState] = []
@@ -537,6 +582,13 @@ class MainWindow(MSFluentWindow):
         items = self._collect_workflow_items()
         flat_index = len(expand_workflow_items(items)) + 1
         items.append(self._make_default_phase(kind, flat_index))
+        self._rebuild_workflow_widgets(items)
+        self.schedule_refresh()
+
+    def _append_template_phase(self, template: str) -> None:
+        items = self._collect_workflow_items()
+        flat_index = len(expand_workflow_items(items)) + 1
+        items.append(self._make_template_phase(template, flat_index))
         self._rebuild_workflow_widgets(items)
         self.schedule_refresh()
 
@@ -809,7 +861,21 @@ class MainWindow(MSFluentWindow):
 
     def schedule_refresh(self, *_: object) -> None:
         if not self._updating_ui:
+            self._confirmed_risk_fingerprint = ()
             self._refresh_timer.start()
+
+    def _risk_fingerprint(self, bundle: ScriptBundle) -> tuple[tuple[str, str | None, str], ...]:
+        return tuple(
+            (issue.code, issue.field, issue.message)
+            for issue in bundle.issues
+            if issue.severity is Severity.WARNING and issue.risk_level is RiskLevel.HIGH
+        )
+
+    def _confirm_high_risk(self) -> None:
+        if not self._current_risk_fingerprint:
+            return
+        self._confirmed_risk_fingerprint = self._current_risk_fingerprint
+        self.refresh_preview()
 
     def refresh_preview(self, *_: object) -> None:
         if self._updating_ui:
@@ -818,9 +884,18 @@ class MainWindow(MSFluentWindow):
             state = self._collect_state()
             bundle = self._backend.preview(state)
             self._last_bundle = bundle
+            self._current_risk_fingerprint = self._risk_fingerprint(bundle)
+            risk_confirmed = bool(self._current_risk_fingerprint) and self._confirmed_risk_fingerprint == self._current_risk_fingerprint
             self.issue_list.set_issues(bundle.issues)
             self.preview_chart.set_bundle(bundle)
-            self.output_panel.set_scripts(bundle.commented_script, bundle.minimal_script, "\n".join(bundle.summary_lines), bundle.can_generate)
+            self.output_panel.set_scripts(
+                bundle.commented_script,
+                bundle.minimal_script,
+                "\n".join(bundle.summary_lines),
+                bundle.can_generate,
+                requires_confirmation=bundle.requires_confirmation,
+                confirmed=risk_confirmed,
+            )
             self._update_current_preview(state)
             self._refresh_workstep_metrics(bundle)
             self.planning_card.setVisible(
@@ -829,14 +904,16 @@ class MainWindow(MSFluentWindow):
                 and self.mode_combo.currentData() == WorkspaceMode.SEQUENCE.value
             )
             self._update_status_bar(bundle)
-        except Exception as exc:  # pragma: no cover
-            issue = ValidationIssue(severity=Severity.ERROR, code="ui.refresh", message=str(exc))
+        except GuiFieldError as exc:
+            issue = ValidationIssue(severity=Severity.ERROR, code="input.invalid", field=exc.field, message=exc.message)
             self._last_bundle = None
+            self._current_risk_fingerprint = ()
+            self._confirmed_risk_fingerprint = ()
             self.issue_list.set_issues([issue])
             self.preview_chart.set_bundle(None)
-            self.output_panel.set_scripts("", "", str(exc), False)
+            self.output_panel.set_scripts("", "", exc.message, False)
             self._refresh_workstep_metrics()
-            self.statusBar().showMessage(f"预览失败：{exc}")
+            self.statusBar().showMessage(f"输入错误：{exc.message}")
 
     def _update_current_preview(self, state: GuiState) -> None:
         try:

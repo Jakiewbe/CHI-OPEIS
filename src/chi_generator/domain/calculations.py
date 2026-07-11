@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from math import log10
+from math import isclose, log10
 
 from .models import (
     BatteryConfig,
@@ -11,6 +11,11 @@ from .models import (
     CurrentInputMode,
     CurrentResolution,
     CurrentSetpointConfig,
+    ControlledPhaseBase,
+    DodCapacityBasis,
+    DodPointConfig,
+    DodPointPhase,
+    ExperimentSequenceRequest,
     ImpedanceConfig,
     PointPlan,
     ProcessDirection,
@@ -119,16 +124,11 @@ def capacity_compensate_time_points(points: list[float], manual_eis_duration_s: 
     return actual_points, offsets
 
 
-def _distribution_fractions(point_count: int, spacing_mode: SpacingMode) -> list[float]:
+def _distribution_fractions(point_count: int) -> list[float]:
     if point_count <= 0:
         return []
     if point_count == 1:
         return [1.0]
-    if spacing_mode is SpacingMode.LOG:
-        base = 10.0
-        return [((base ** (index / point_count)) - 1.0) / (base - 1.0) for index in range(1, point_count + 1)]
-    if spacing_mode is SpacingMode.SQRT:
-        return [(index / point_count) ** 2 for index in range(1, point_count + 1)]
     return [index / point_count for index in range(1, point_count + 1)]
 
 
@@ -178,7 +178,7 @@ def expand_voltage_range(config: VoltagePointConfig, direction: ProcessDirection
         return _round_values(points)
 
     point_count = int(round(delta_v / step_v)) + 1
-    fractions = _distribution_fractions(point_count - 1, config.spacing_mode)
+    fractions = _distribution_fractions(point_count - 1)
     points = [start_v]
     if fractions:
         points.extend(start_v + sign * delta_v * fraction for fraction in fractions)
@@ -227,6 +227,44 @@ def expand_time_segments(config: TimePointConfig) -> list[float]:
 def plan_voltage_points(config: VoltagePointConfig, *, direction: ProcessDirection = ProcessDirection.DISCHARGE) -> PointPlan:
     points = expand_voltage_range(config, direction)
     return PointPlan(points=points, actual_points=list(points))
+
+
+def resolve_dod_capacity_mah(battery: BatteryConfig, config: DodPointConfig) -> float:
+    if config.capacity_basis is DodCapacityBasis.THEORETICAL:
+        return (battery.active_material_mg / 1000.0) * battery.theoretical_capacity_mah_mg
+    assert config.reference_capacity_mah is not None
+    return config.reference_capacity_mah
+
+
+def resolve_sequence_capacity_ah(request: ExperimentSequenceRequest) -> float:
+    """Resolve the single capacity basis used by DOD planning and SoC."""
+
+    dod_capacities = [
+        resolve_dod_capacity_mah(request.battery, phase.dod_points) / 1000.0
+        for phase in request.phases
+        if isinstance(phase, DodPointPhase)
+    ]
+    if dod_capacities:
+        first = dod_capacities[0]
+        if any(not isclose(value, first, rel_tol=1e-9, abs_tol=1e-12) for value in dod_capacities[1:]):
+            raise ValueError("all DOD phases must use the same capacity")
+        return first
+
+    for phase in request.phases:
+        if isinstance(phase, ControlledPhaseBase):
+            return resolve_current(request.battery, request.current_basis, phase.current_setpoint).one_c_current_a
+    return 0.0
+
+
+def plan_dod_points(config: DodPointConfig, *, battery: BatteryConfig, current_a: float) -> PointPlan:
+    capacity_mah = resolve_dod_capacity_mah(battery, config)
+    current_ma = abs(current_a) * 1000.0
+    if current_ma <= 0:
+        raise ValueError("DOD planning requires non-zero current")
+    points = _round_values(list(config.dod_points_percent))
+    actual_points = _round_values([point / 100.0 * capacity_mah / current_ma * 60.0 for point in points])
+    deltas = cumulative_timepoints_to_deltas(actual_points)
+    return PointPlan(points=points, actual_points=actual_points, deltas=deltas)
 
 
 def estimate_eis_scan_duration_s(config: ImpedanceConfig) -> float:
@@ -385,8 +423,10 @@ __all__ = [
     "estimate_eis_scan_duration_s",
     "expand_time_segments",
     "expand_voltage_range",
+    "plan_dod_points",
     "plan_time_points",
     "plan_voltage_points",
+    "resolve_dod_capacity_mah",
     "resolve_current",
     "resolve_eis_duration_s",
     "resolve_one_c_current",

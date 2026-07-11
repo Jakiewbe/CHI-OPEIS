@@ -7,7 +7,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from chi_generator.domain.models import ImpedanceMeasurementMode, ProcessDirection, SamplingMode, TimeBasisMode
+from chi_generator.domain.models import DodCapacityBasis, EisInitStrategy, ImpedanceMeasurementMode, ProcessDirection, SamplingMode, TimeBasisMode
 
 
 class WorkspaceMode(StrEnum):
@@ -28,6 +28,7 @@ class CurrentInputUiMode(StrEnum):
 class PhaseUiKind(StrEnum):
     TIME_POINTS = "time_points"
     VOLTAGE_POINTS = "voltage_points"
+    DOD_POINTS = "dod_points"
     REST = "rest"
 
 
@@ -84,6 +85,13 @@ class GuiPhaseState(BaseModel):
     voltage_step_v: str = "0.1"
     voltage_input_mode: VoltageInputUiMode = VoltageInputUiMode.RANGE
     voltage_manual_points_text: str = ""
+    eis_init_strategy: EisInitStrategy = EisInitStrategy.TARGET_VOLTAGE
+    post_trigger_rest_s: str = "0"
+    manual_init_e_v: str = "3.0"
+    estimated_loaded_start_v: str = ""
+    dod_points_text: str = "20\n40\n60\n80\n100"
+    dod_capacity_basis: DodCapacityBasis = DodCapacityBasis.THEORETICAL
+    dod_reference_capacity_mah: str = ""
 
     time_basis_mode: TimeBasisMode = TimeBasisMode.ACTIVE_PROGRESS
     sampling_mode: SamplingMode = SamplingMode.SEGMENTED

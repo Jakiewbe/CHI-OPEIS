@@ -20,6 +20,7 @@ def _phase_kind_text(kind: PhaseKind) -> str:
     return {
         PhaseKind.TIME_POINTS: "时间取点",
         PhaseKind.VOLTAGE_POINTS: "电压取点",
+        PhaseKind.DOD_POINTS: "DOD 取点",
         PhaseKind.REST: "静置工步",
     }[kind]
 
@@ -50,6 +51,7 @@ class ScriptGenerationService:
         summary_lines = self._build_sequence_summary_lines(request, summary)
         commented_script = wrap_commented_script(summary_lines=summary_lines, script_lines=minimal_lines, issues=issues)
         minimal_script = "\n".join(minimal_lines)
+        total_wall_clock_s = summary.get("total_wall_clock_s")
         return SequenceScriptBundle(
             commented_script=commented_script if validation.can_generate else "",
             minimal_script=minimal_script if validation.can_generate else "",
@@ -58,7 +60,9 @@ class ScriptGenerationService:
             estimated_eis_duration_s=summary.get("estimated_eis_duration_s"),
             summary_lines=summary_lines,
             phase_plans=list(summary.get("phase_plans", [])),
-            total_wall_clock_s=float(summary.get("total_wall_clock_s", 0.0)),
+            total_wall_clock_s=float(total_wall_clock_s) if total_wall_clock_s is not None else None,
+            known_wall_clock_s=float(summary.get("known_wall_clock_s", 0.0)),
+            soc_prediction_complete=bool(summary.get("soc_prediction_complete", True)),
             total_point_count=int(summary.get("total_point_count", 0)),
             total_eis_count=int(summary.get("total_eis_count", 0)),
             soc_trace=list(summary.get("soc_trace", [])),
@@ -100,6 +104,8 @@ class ScriptGenerationService:
             lines.append(f"1C 电流：{summary['one_c_current_a']:.9f} A")
         if summary.get("soc_zero_time_s") is not None:
             lines.append(f"SoC 预计归零时间：{float(summary['soc_zero_time_s']) / 60.0:.2f} min")
+        if not bool(summary.get("soc_prediction_complete", True)):
+            lines.append("SoC 预测：不完整（CP 到目标电压的耗时无法由输入参数确定）")
         lines.append(f"SoC 耗尽后的丢点数：{lost_checkpoint_count}")
 
         for plan in phase_plans:
@@ -116,7 +122,7 @@ class ScriptGenerationService:
                     "manual": "手动列表",
                 }.get(plan.sampling_mode.value if plan.sampling_mode is not None else "segmented", "分段取点")
                 lines.append(
-                    f"  采样：{mode_text} | {basis_text} | {plan.point_count} 点 | {plan.eis_count} 次 EIS | {plan.wall_clock_total_s / 60.0:.1f} min"
+                    f"  采样：{mode_text} | {basis_text} | {plan.point_count} 点 | {plan.eis_count} 次 EIS | {float(plan.wall_clock_total_s or 0.0) / 60.0:.1f} min"
                 )
                 if plan.compensation_offsets_min:
                     label = "容量补偿偏移（min）" if plan.time_basis_mode is TimeBasisMode.CAPACITY_COMPENSATED else "补偿偏移（min）"
@@ -126,13 +132,26 @@ class ScriptGenerationService:
                     "linear": "范围生成",
                     "manual": "手动列表",
                 }.get(plan.sampling_mode.value if plan.sampling_mode is not None else "linear", "范围生成")
-                lines.append(f"  采样：{mode_text} | {plan.point_count} 点 | {plan.eis_count} 次 EIS | {plan.wall_clock_total_s / 60.0:.1f} min")
+                lines.append(
+                    f"  采样：{mode_text} | {plan.point_count} 点 | {plan.eis_count} 次 EIS | "
+                    f"已知固定时长至少 {plan.known_wall_clock_s / 60.0:.1f} min，CP 时长未知"
+                )
+            elif plan.phase_kind is PhaseKind.DOD_POINTS:
+                basis_text = {
+                    "theoretical": "理论容量",
+                    "user_reference": "用户参考容量",
+                    "control_cell": "无 EIS 对照容量",
+                }.get(plan.sampling_mode.value if plan.sampling_mode is not None else "theoretical", "理论容量")
+                lines.append(f"  采样：DOD | {basis_text} | {plan.point_count} 点 | {plan.eis_count} 次 EIS | {float(plan.wall_clock_total_s or 0.0) / 60.0:.1f} min")
             else:
-                lines.append(f"  静置：{plan.wall_clock_total_s:g} s")
+                lines.append(f"  静置：{float(plan.wall_clock_total_s or 0.0):g} s")
             if plan.lost_eis_marker_times_s:
                 lines.append("  丢失点位（min）： " + ", ".join(f"{value / 60.0:g}" for value in plan.lost_eis_marker_times_s))
 
-        lines.append(f"总历时：{float(summary.get('total_wall_clock_s', 0.0)) / 60.0:.2f} min")
+        if summary.get("total_wall_clock_s") is None:
+            lines.append(f"总历时：未知；已知固定时长至少 {float(summary.get('known_wall_clock_s', 0.0)) / 60.0:.2f} min")
+        else:
+            lines.append(f"总历时：{float(summary.get('total_wall_clock_s', 0.0)) / 60.0:.2f} min")
         return lines
 
     def _build_pulse_summary_lines(self, request: ExperimentRequest, summary: dict[str, object]) -> list[str]:

@@ -59,8 +59,11 @@ py -3.11 -m venv .venv
 
 ```text
 dist/CHI-OPEIS/
-dist/CHI-OPEIS-release.zip
+dist/CHI-OPEIS-<version>-windows-x64.zip
+dist/SHA256SUMS.txt
 ```
+
+构建脚本还会执行冻结程序的 `--smoke-test`，确认打包后的领域生成器可以导入并初始化；GUI 的离屏启动由测试套件覆盖。
 
 ## 空白电脑分发
 
@@ -80,3 +83,4 @@ dist/CHI-OPEIS-release.zip
 
 - 生成脚本不依赖目标电脑上的 Python 运行环境。
 - 如果后续调整入口文件位置，需要同步更新 `CHI-OPEIS.spec` 中的 `src/chi_generator/main.py`。
+- PyInstaller 在 Windows 上可能报告 `tzdata` 和 `darkdetect` 的非关键警告；当前项目不依赖这两个模块完成脚本生成或界面启动。

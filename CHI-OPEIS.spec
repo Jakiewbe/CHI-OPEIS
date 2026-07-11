@@ -44,17 +44,46 @@ _keep_translations = frozenset({
     'qt_help_zh_CN.qm', 'qt_help_zh_TW.qm', 'qt_help_en.qm',
 })
 
+# Prune non-essential PySide6 plugins.
+# Keep only plugins required for a standard Windows desktop GUI app.
+_keep_plugins = frozenset({
+    # Platform
+    'qwindows.dll',
+    # Image formats
+    'qjpeg.dll', 'qwebp.dll', 'qtiff.dll',
+    # Icon / style
+    'qsvgicon.dll', 'qmodernwindowsstyle.dll',
+    # TLS (Windows native)
+    'qschannelbackend.dll',
+})
+
 from PyInstaller.building.datastruct import TOC
 import os
 
-_filtered_datas = TOC()
-for item in a.datas:
+def _should_keep(item, keep_set, path_marker):
     name = os.path.basename(item[0])
     if name.endswith('.qm') and 'PySide6' in item[0] and 'translations' in item[0]:
-        if name not in _keep_translations:
-            continue
+        return name in keep_set
+    if path_marker in item[0]:
+        return name in keep_set
+    return True
+
+_filtered_datas = TOC()
+for item in a.datas:
+    if not _should_keep(item, _keep_translations, 'translations'):
+        continue
+    if not _should_keep(item, _keep_plugins, 'plugins'):
+        continue
     _filtered_datas.append(item)
 a.datas = _filtered_datas
+
+# Also prune binaries that live under plugins/ (some hooks put .dlls in binaries instead of datas).
+_filtered_binaries = TOC()
+for item in a.binaries:
+    if not _should_keep(item, _keep_plugins, 'plugins'):
+        continue
+    _filtered_binaries.append(item)
+a.binaries = _filtered_binaries
 
 pyz = PYZ(a.pure)
 

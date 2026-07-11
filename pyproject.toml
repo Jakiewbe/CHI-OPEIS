@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "opeis-master"
-version = "0.2.0"
+version = "0.3.0"
 description = "Local desktop GUI application generator for CHI in-situ EIS scripts."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -18,6 +18,7 @@ dependencies = [
 dev = [
   "pytest>=8.3,<9",
   "pytest-qt>=4.4,<5",
+  "pytest-cov>=6,<7",
 ]
 build = [
   "pyinstaller>=6.11,<7",
@@ -33,8 +34,18 @@ pythonpath = ["src"]
 addopts = "-ra"
 markers = [
   "integration: contract-level tests for the application stack",
+  "domain: tests that exercise the pure domain layer",
   "gui: tests that exercise the GUI layer or its launch contract",
+  "packaging: tests for release and packaged entry points",
 ]
+
+[tool.coverage.run]
+source = ["chi_generator"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
 
 [tool.setuptools]
 package-dir = {"" = "src"}

@@ -1,4 +1,4 @@
-﻿"""Reusable Qt widgets for the Fluent GUI."""
+"""Reusable Qt widgets for the Fluent GUI."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from PySide6.QtWidgets import QApplication, QDialog, QDialogButtonBox, QFrame, Q
 from qfluentwidgets import CheckBox, ComboBox, EditableComboBox, LineEdit, ListWidget, PlainTextEdit, PrimaryPushButton, PushButton, SimpleCardWidget, StrongBodyLabel
 
 from chi_generator.domain.calculations import calculate_ctc_recommendation, expand_voltage_range
-from chi_generator.domain.models import ProcessDirection, RiskLevel, SamplingMode, Severity, ValidationIssue
+from chi_generator.domain.models import DodCapacityBasis, EisInitStrategy, ProcessDirection, RiskLevel, SamplingMode, Severity, ValidationIssue
 from chi_generator.ui.models import CurrentInputUiMode, FixedTimeUiMode, GuiLoopState, GuiPhaseState, GuiTimeSegmentState, PhaseUiKind, VoltageInputUiMode
 from chi_generator.ui.planning import parse_float_list
 
@@ -89,356 +89,6 @@ class SummaryPanel(PlainTextEdit):
 
     def setText(self, text: str) -> None:
         self.setPlainText(text)
-
-
-class IssueListWidget(ListWidget):
-    _code_map = {
-        "dense_eis_low_frequency": "低频端设置为 0.01 Hz，判定为高风险密集取点。",
-        "long_single_eis_duration": "当前单次 EIS 持续时间较长。",
-        "interrupted_progress": "EIS 插入过于频繁，会明显打断恒流轨迹。",
-        "high_compensation_total": "中断补偿累计时间较大，会拉长后续恒流历时。",
-        "frequent_direction_switches": "工步切换充放电方向较频繁，请确认流程设计。",
-        "rest_dominates_sequence": "静置总时长超过电化学工作时长，请确认是否符合预期。",
-        "soc_depletion_risk": "SoC 仿真显示在全部 EIS 完成前可能已经耗尽。",
-        "ctc_enabled": "已启用等效容量补偿。",
-        "missing_phases": "至少需要一个工步。",
-        "phase_invalid": "工步参数无效。",
-        "missing_pulse": "脉冲模式缺少脉冲参数。",
-        "ui.refresh": "界面预览刷新失败。",
-    }
-
-    _hint_map = {
-        "dense_eis_low_frequency": "风险预估按长时低频 EIS 处理。",
-        "long_single_eis_duration": "当前估算的单次扫描时间较长。",
-        "interrupted_progress": "建议降低取点密度，或只在关键点插入 EIS。",
-        "high_compensation_total": "建议检查中断补偿模式是否过密。",
-        "soc_depletion_risk": "采样看板中的红点表示预测会丢失的点位。",
-        "ctc_enabled": "适用于需要锁定总等效放电量的测试。",
-    }
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setWordWrap(True)
-
-    def _format_issue(self, issue: ValidationIssue) -> str:
-        severity_map = {Severity.ERROR: "错误", Severity.WARNING: "警告", Severity.INFO: "提示"}
-        field_map = {"impedance_defaults.low_frequency_hz": "阻抗低频", "phases": "工步", "pulse": "脉冲参数"}
-        message = self._code_map.get(issue.code, issue.message)
-        if issue.code == "phase_invalid" and issue.message:
-            message = issue.message
-        hint = self._hint_map.get(issue.code, issue.hint)
-        field = field_map.get(issue.field or "", issue.field or "-")
-        text = f"[{severity_map[issue.severity]}] {field}: {message}"
-        if hint:
-            text += f"\n提示：{hint}"
-        return text
-
-    def set_issues(self, issues: list[ValidationIssue]) -> None:
-        self.clear()
-        if not issues:
-            self.addItem(QListWidgetItem("当前没有警告或错误。"))
-            return
-        for issue in issues:
-            item = QListWidgetItem(self._format_issue(issue))
-            if issue.severity is Severity.ERROR:
-                item.setForeground(Qt.GlobalColor.red)
-            elif issue.severity is Severity.WARNING:
-                item.setForeground(Qt.GlobalColor.darkYellow)
-            else:
-                item.setForeground(Qt.GlobalColor.darkCyan)
-            self.addItem(item)
-
-
-class ScriptOutputPanel(QWidget):
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self._copy_feedback_timer = QTimer(self)
-        self._copy_feedback_timer.setSingleShot(True)
-        self._copy_feedback_timer.setInterval(1200)
-        self._copy_feedback_timer.timeout.connect(self._reset_copy_button)
-
-        root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(10)
-        self.summary_label = SummaryPanel(self)
-        self.summary_label.setPlainText("等待预览生成")
-        self.summary_label.setObjectName("summaryPanel")
-        root.addWidget(self.summary_label, 0)
-        self.editor_title = QLabel("最简脚本", self)
-        self.editor_title.setObjectName("panelLabel")
-        root.addWidget(self.editor_title)
-        self.minimal_editor = ScriptEditor()
-        self.minimal_editor.setReadOnly(True)
-        self.minimal_editor.setLineWrapMode(PlainTextEdit.LineWrapMode.NoWrap)
-        font = self.minimal_editor.font()
-        font.setFamily(fixed_font_family())
-        self.minimal_editor.setFont(font)
-        self.minimal_editor.setMinimumHeight(260)
-        root.addWidget(self.minimal_editor, 1)
-        button_row = QHBoxLayout()
-        self.copy_minimal_button = PrimaryPushButton(self)
-        self.copy_minimal_button.setText("复制最简脚本")
-        self.copy_minimal_button.clicked.connect(self._handle_copy_minimal)
-        button_row.addWidget(self.copy_minimal_button)
-        button_row.addStretch(1)
-        root.addLayout(button_row)
-
-    def _set_editor_text(self, editor: PlainTextEdit, text: str) -> None:
-        if editor.toPlainText() == text:
-            return
-        vertical_value = editor.verticalScrollBar().value()
-        horizontal_value = editor.horizontalScrollBar().value()
-        editor.setPlainText(text)
-        editor.verticalScrollBar().setValue(vertical_value)
-        editor.horizontalScrollBar().setValue(horizontal_value)
-
-    def _handle_copy_minimal(self) -> None:
-        text = self.minimal_editor.toPlainText()
-        if not text.strip():
-            return
-        QApplication.clipboard().setText(text)
-        self.copy_minimal_button.setText("已复制")
-        self._copy_feedback_timer.start()
-
-    def _reset_copy_button(self) -> None:
-        self.copy_minimal_button.setText("复制最简脚本")
-
-    def set_scripts(self, commented: str, minimal: str, summary: str, can_copy: bool) -> None:
-        del commented
-        self._set_editor_text(self.minimal_editor, minimal)
-        self.summary_label.setText(summary)
-        self.copy_minimal_button.setEnabled(can_copy and bool(minimal.strip()))
-        if not (can_copy and bool(minimal.strip())):
-            self._reset_copy_button()
-
-
-class ManualPointDialog(QDialog):
-    def __init__(self, *, title: str, text: str, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle(title)
-        self.resize(460, 320)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(10)
-        hint = QLabel("支持粘贴逗号、空格或换行分隔的数值。时间列表输入累计分钟，电压列表输入伏特。", self)
-        hint.setWordWrap(True)
-        layout.addWidget(hint)
-        self.editor = PlainTextEdit(self)
-        self.editor.setPlainText(text)
-        font = self.editor.font()
-        font.setFamily(fixed_font_family())
-        self.editor.setFont(font)
-        layout.addWidget(self.editor, 1)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, self)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-    def value(self) -> str:
-        return self.editor.toPlainText().strip()
-
-
-class GuidedManualPointDialog(QDialog):
-    def __init__(
-        self,
-        *,
-        title: str,
-        text: str,
-        is_voltage: bool = False,
-        direction: ProcessDirection | None = None,
-        parent: QWidget | None = None,
-    ) -> None:
-        super().__init__(parent)
-        self.setWindowTitle(title)
-        self.resize(460, 320)
-        self.setStyleSheet(
-            "QDialog {"
-            " background-color: #f3f5f7;"
-            "}"
-            "QLabel {"
-            " color: #5f6b7a;"
-            "}"
-            "QDialogButtonBox QPushButton {"
-            " min-width: 72px;"
-            " color: #1d2329;"
-            "}"
-            "QDialogButtonBox QPushButton:disabled {"
-            " color: #1d2329;"
-            "}"
-        )
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(10)
-
-        hint_parts = ["支持粘贴逗号、空格或换行分隔的数值。时间列表输入累计分钟，电压列表输入伏特。"]
-        if is_voltage and direction is ProcessDirection.DISCHARGE:
-            hint_parts.append("当前工步为放电，建议按从高到低输入，例如 3.20 3.05 2.92 2.80。")
-        elif is_voltage and direction is ProcessDirection.CHARGE:
-            hint_parts.append("当前工步为充电，建议按从低到高输入，例如 2.80 2.92 3.05 3.20。")
-        hint = QLabel("\n".join(hint_parts), self)
-        hint.setWordWrap(True)
-        layout.addWidget(hint)
-
-        self.editor = QPlainTextEdit(self)
-        self.editor.setPlainText(text)
-        self.editor.setPlaceholderText("3.20\n3.05\n2.92\n2.80" if is_voltage else "10\n25\n40\n60")
-        self.editor.setStyleSheet(
-            "QPlainTextEdit {"
-            " background-color: #f7f8fa;"
-            " color: #1d2329;"
-            " border: 1px solid #b8c0cc;"
-            " border-radius: 8px;"
-            " padding: 8px;"
-            " selection-background-color: #cfd6df;"
-            " selection-color: #1d2329;"
-            "}"
-            "QPlainTextEdit:focus {"
-            " border: 1px solid #98a2b3;"
-            "}"
-        )
-        font = self.editor.font()
-        font.setFamily(fixed_font_family())
-        self.editor.setFont(font)
-        layout.addWidget(self.editor, 1)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, self)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-    def value(self) -> str:
-        return self.editor.toPlainText().strip()
-
-
-
-
-
-
-
-def _set_combo_texts_clean(combo, texts: list[str]) -> None:
-    for index, text in enumerate(texts):
-        if index < combo.count():
-            combo.setItemText(index, text)
-
-
-def _script_output_init_clean(self: ScriptOutputPanel, parent: QWidget | None = None) -> None:
-    _ORIGINAL_SCRIPT_OUTPUT_INIT(self, parent)
-    self.summary_label.setPlainText("等待预览生成")
-    self.editor_title.setText("极简脚本")
-    self.copy_minimal_button.setText("复制极简脚本")
-
-
-def _script_output_reset_copy_button_clean(self: ScriptOutputPanel) -> None:
-    self.copy_minimal_button.setText("复制极简脚本")
-
-
-def _workstep_sync_copy_clean(self: WorkstepEditorRow) -> None:
-    self.label_edit.setPlaceholderText("可选名称（仅用于界面摘要）")
-    _set_combo_texts_clean(self.phase_kind_combo, ["时间取点", "电压取点", "静置"])
-    _set_combo_texts_clean(self.direction_combo, ["放电", "充电"])
-    _set_combo_texts_clean(self.current_mode_combo, ["倍率", "绝对电流"])
-    _set_combo_texts_clean(self.time_mode_combo, ["固定", "分段", "手动"])
-    self.rate_edit.setPlaceholderText("倍率 / C")
-    self.current_edit.setPlaceholderText("电流 / A")
-    self.pre_wait_edit.setPlaceholderText("点前等待 / s")
-    self.insert_eis_box.setText("每个点后插入 EIS")
-    self.move_up_button.setText("上移")
-    self.move_down_button.setText("下移")
-    self.delete_button.setText("删除")
-    self.smart_recommend_button.setText("推荐取点")
-    self.manual_time_button.setText("编辑时间列表")
-    self.manual_voltage_button.setText("编辑电压列表")
-    self.add_segment_button.setText("新增分段")
-    self.manual_time_status.setText(f"{self._count_values(self._manual_time_points_text)} 个值")
-    self.manual_voltage_status.setText(f"{self._count_values(self._manual_voltage_points_text)} 个值")
-    if "EIS" in self.point_count_label.text():
-        self.point_count_label.setText(
-            self.point_count_label.text().replace("鐐?/ ", "点 / ").replace("鐐?/", "点 / ").replace("娆?EIS", "次 EIS").replace("次EIS", "次 EIS")
-        )
-    phase_kind = self.phase_kind_combo.currentData()
-    if phase_kind == PhaseUiKind.TIME_POINTS.value:
-        self.phase_hint_label.setText("通过固定、分段或手动采样匹配放电过程的物理分区。")
-    elif phase_kind == PhaseUiKind.VOLTAGE_POINTS.value:
-        self.phase_hint_label.setText("电压工步可使用范围生成或手动列表，应对不可整除和非均匀取点。")
-    else:
-        self.phase_hint_label.setText("静置工步表示真正独立的静置阶段。")
-    for segment in getattr(self, "segment_editors", []):
-        segment.label.setText(f"分段 {segment.index + 1}")
-        segment.remove_button.setText("删除")
-
-
-def _workstep_set_state_clean(self: WorkstepEditorRow, state: GuiPhaseState) -> None:
-    _ORIGINAL_WORKSTEP_SET_STATE(self, state)
-    _workstep_sync_copy_clean(self)
-
-
-def _workstep_sync_visibility_clean(self: WorkstepEditorRow) -> None:
-    _ORIGINAL_WORKSTEP_SYNC_VISIBILITY(self)
-    _workstep_sync_copy_clean(self)
-
-
-def _workstep_set_order_state_clean(self: WorkstepEditorRow, index: int, total: int) -> None:
-    _ORIGINAL_WORKSTEP_SET_ORDER_STATE(self, index, total)
-    _workstep_sync_copy_clean(self)
-
-
-def _loop_sync_copy_clean(self: LoopBlockWidget) -> None:
-    self.duplicate_button.setText("复制块")
-    self.move_up_button.setText("上移")
-    self.move_down_button.setText("下移")
-    self.delete_button.setText("删除")
-    self.expand_button.setText("折叠" if self.body.isVisible() else "展开")
-    self.summary_label.setText(
-        f"包含 {len(self.phase_rows)} 个工步，每轮展开 {len(self.phase_rows)} 个，当前重复次数 {self.repeat_count_edit.text() or '2'}。"
-    )
-
-
-def _loop_set_state_clean(self: LoopBlockWidget, state: GuiLoopState) -> None:
-    _ORIGINAL_LOOP_SET_STATE(self, state)
-    _loop_sync_copy_clean(self)
-
-
-def _loop_set_order_state_clean(self: LoopBlockWidget, index: int, total: int) -> None:
-    _ORIGINAL_LOOP_SET_ORDER_STATE(self, index, total)
-    _loop_sync_copy_clean(self)
-
-
-def _loop_toggle_body_clean(self: LoopBlockWidget) -> None:
-    _ORIGINAL_LOOP_TOGGLE_BODY(self)
-    _loop_sync_copy_clean(self)
-
-
-def _issue_format_clean(self: IssueListWidget, issue: ValidationIssue) -> str:
-    severity_map = {Severity.ERROR: "错误", Severity.WARNING: "警告", Severity.INFO: "提示"}
-    field_map = {
-        "impedance_defaults.low_frequency_hz": "阻抗低频",
-        "phases": "工步",
-        "pulse": "脉冲参数",
-    }
-    risk_map = {
-        RiskLevel.BLOCKING: "阻断",
-        RiskLevel.HIGH: "强警告",
-        RiskLevel.MEDIUM: "警告",
-        RiskLevel.LOW: "提示",
-        None: "",
-    }
-    message = self._code_map.get(issue.code, issue.message)
-    if issue.code == "phase_invalid" and issue.message:
-        message = issue.message
-    hint = self._hint_map.get(issue.code, issue.hint)
-    field = field_map.get(issue.field or "", issue.field or "-")
-    text = f"[{severity_map[issue.severity]}] {field}: {message}"
-    risk_prefix = risk_map.get(issue.risk_level, "")
-    if risk_prefix:
-        text = f"[{risk_prefix}] {text}"
-    if hint:
-        text += f"\n提示：{hint}"
-    return text
-
-
-_ORIGINAL_SCRIPT_OUTPUT_INIT = ScriptOutputPanel.__init__
-ScriptOutputPanel.__init__ = _script_output_init_clean
-ScriptOutputPanel._reset_copy_button = _script_output_reset_copy_button_clean
 
 
 class LoopCountDialog(QDialog):
@@ -524,6 +174,7 @@ class WorkstepEditorRow(QFrame):
         self.on_delete = on_delete
         self._manual_time_points_text = ""
         self._manual_voltage_points_text = ""
+        self._manual_dod_points_text = ""
         self.segment_editors: list[SegmentEditor] = []
         self._build_ui()
         self.set_state(state)
@@ -541,7 +192,12 @@ class WorkstepEditorRow(QFrame):
         self.order_badge.setMinimumWidth(52)
         self.label_edit = self._line_edit("工步标签（可留空自动命名）")
         self.label_edit.setToolTip("仅用于预览摘要和导出说明，不影响 CHI 命令。")
-        self.phase_kind_combo = self._combo([("时间取点", PhaseUiKind.TIME_POINTS.value), ("电压取点", PhaseUiKind.VOLTAGE_POINTS.value), ("静置", PhaseUiKind.REST.value)])
+        self.phase_kind_combo = self._combo([
+            ("时间取点", PhaseUiKind.TIME_POINTS.value),
+            ("电压取点", PhaseUiKind.VOLTAGE_POINTS.value),
+            ("DOD取点", PhaseUiKind.DOD_POINTS.value),
+            ("静置", PhaseUiKind.REST.value),
+        ])
         self.direction_combo = self._combo([("放电", ProcessDirection.DISCHARGE.value), ("充电", ProcessDirection.CHARGE.value)])
         self.current_mode_combo = self._combo([("倍率", CurrentInputUiMode.RATE.value), ("绝对电流", CurrentInputUiMode.ABSOLUTE.value)])
         self.rate_edit = self._line_edit("倍率 / C")
@@ -668,6 +324,51 @@ class WorkstepEditorRow(QFrame):
         self.manual_voltage_button.clicked.connect(self._edit_manual_voltage_points)
         root.addWidget(self.manual_voltage_wrap)
 
+        self.eis_init_strategy_combo = self._combo([
+            ("目标电压 ei", EisInitStrategy.TARGET_VOLTAGE.value),
+            ("弛豫 eio", EisInitStrategy.OPEN_CIRCUIT.value),
+            ("手动 ei", EisInitStrategy.MANUAL.value),
+        ])
+        self.post_trigger_rest_edit = self._line_edit("触发后静置 / s")
+        self.manual_init_e_edit = self._line_edit("手动 EIS 初始电位 / V")
+        self.estimated_loaded_start_edit = self._line_edit("预计瞬时负载电压 / V")
+        self.eis_strategy_field = self._field("EIS 基准", self.eis_init_strategy_combo)
+        self.post_trigger_rest_field = self._field("触发后静置 / s", self.post_trigger_rest_edit)
+        self.manual_init_e_field = self._field("手动 ei / V", self.manual_init_e_edit)
+        self.estimated_loaded_start_field = self._field("瞬时负载电压 / V", self.estimated_loaded_start_edit)
+        self.voltage_eis_row = self._row(
+            self.eis_strategy_field,
+            self.post_trigger_rest_field,
+            self.manual_init_e_field,
+            self.estimated_loaded_start_field,
+        )
+        root.addWidget(self.voltage_eis_row)
+
+        self.dod_points_wrap = QWidget(self)
+        dod_points_layout = QHBoxLayout(self.dod_points_wrap)
+        dod_points_layout.setContentsMargins(0, 0, 0, 0)
+        self.dod_points_button = PushButton(self)
+        self.dod_points_button.setText("编辑 DOD 列表")
+        self.dod_points_status = QLabel("0 个值", self)
+        dod_points_layout.addWidget(self.dod_points_button)
+        dod_points_layout.addWidget(self.dod_points_status, 1)
+        self.dod_points_button.clicked.connect(self._edit_manual_dod_points)
+        self.dod_capacity_basis_combo = self._combo([
+            ("理论容量", DodCapacityBasis.THEORETICAL.value),
+            ("用户参考容量", DodCapacityBasis.USER_REFERENCE.value),
+            ("无 EIS 对照容量", DodCapacityBasis.CONTROL_CELL.value),
+        ])
+        self.dod_reference_capacity_edit = self._line_edit("参考容量 / mAh")
+        self.dod_points_field = self._field("DOD 点 / %", self.dod_points_wrap)
+        self.dod_capacity_basis_field = self._field("容量基准", self.dod_capacity_basis_combo)
+        self.dod_reference_capacity_field = self._field("参考容量 / mAh", self.dod_reference_capacity_edit)
+        self.dod_row = self._row(
+            self.dod_points_field,
+            self.dod_capacity_basis_field,
+            self.dod_reference_capacity_field,
+        )
+        root.addWidget(self.dod_row)
+
         self.rest_duration_edit = self._line_edit("静置时长 / s")
         self.rest_row = self._row(self._field("静置时长 / s", self.rest_duration_edit))
         root.addWidget(self.rest_row)
@@ -744,21 +445,6 @@ class WorkstepEditorRow(QFrame):
             return 0
 
     def _edit_manual_time_points(self) -> None:
-        dialog = ManualPointDialog(title="编辑时间列表", text=self._manual_time_points_text, parent=self)
-        if dialog.exec():
-            self._manual_time_points_text = dialog.value()
-            self._sync_visibility()
-            self._handle_change()
-
-    def _edit_manual_voltage_points(self) -> None:
-        dialog = ManualPointDialog(title="编辑电压列表", text=self._manual_voltage_points_text, parent=self)
-        if dialog.exec():
-            self._manual_voltage_points_text = dialog.value()
-            self.voltage_input_mode_combo.setCurrentIndex(self.voltage_input_mode_combo.findData(VoltageInputUiMode.MANUAL.value))
-            self._sync_visibility()
-            self._handle_change()
-
-    def _edit_manual_time_points(self) -> None:
         dialog = GuidedManualPointDialog(title="编辑时间列表", text=self._manual_time_points_text, parent=self)
         if dialog.exec():
             self._manual_time_points_text = dialog.value()
@@ -776,6 +462,13 @@ class WorkstepEditorRow(QFrame):
         if dialog.exec():
             self._manual_voltage_points_text = dialog.value()
             self.voltage_input_mode_combo.setCurrentIndex(self.voltage_input_mode_combo.findData(VoltageInputUiMode.MANUAL.value))
+            self._sync_visibility()
+            self._handle_change()
+
+    def _edit_manual_dod_points(self) -> None:
+        dialog = GuidedManualPointDialog(title="编辑 DOD 列表", text=self._manual_dod_points_text, parent=self)
+        if dialog.exec():
+            self._manual_dod_points_text = dialog.value()
             self._sync_visibility()
             self._handle_change()
 
@@ -815,6 +508,8 @@ class WorkstepEditorRow(QFrame):
                     )
                 except ValueError:
                     point_count = 0
+        elif phase_kind is PhaseUiKind.DOD_POINTS:
+            point_count = self._count_values(self._manual_dod_points_text)
         else:
             point_count = 0
         eis_count = point_count if self.insert_eis_box.isChecked() and phase_kind is not PhaseUiKind.REST else 0
@@ -858,13 +553,24 @@ class WorkstepEditorRow(QFrame):
         self.voltage_start_edit.setVisible(is_voltage and self.voltage_input_mode_combo.currentData() == VoltageInputUiMode.RANGE.value)
         self.voltage_end_edit.setVisible(is_voltage and self.voltage_input_mode_combo.currentData() == VoltageInputUiMode.RANGE.value)
         self.voltage_step_edit.setVisible(is_voltage and self.voltage_input_mode_combo.currentData() == VoltageInputUiMode.RANGE.value)
+        is_dod = phase_kind is PhaseUiKind.DOD_POINTS
+        self.voltage_eis_row.setVisible(is_voltage or is_dod)
+        self.eis_strategy_field.setVisible(is_voltage)
+        self.post_trigger_rest_field.setVisible(is_voltage or is_dod)
+        self.manual_init_e_field.setVisible(is_voltage and self.eis_init_strategy_combo.currentData() == EisInitStrategy.MANUAL.value)
+        self.estimated_loaded_start_field.setVisible(is_voltage)
+        self.dod_row.setVisible(is_dod)
+        self.dod_reference_capacity_field.setVisible(is_dod and self.dod_capacity_basis_combo.currentData() != DodCapacityBasis.THEORETICAL.value)
 
         self.manual_time_status.setText(f"{self._count_values(self._manual_time_points_text)} 个值")
         self.manual_voltage_status.setText(f"{self._count_values(self._manual_voltage_points_text)} 个值")
+        self.dod_points_status.setText(f"{self._count_values(self._manual_dod_points_text)} 个值")
         if is_time:
             self.phase_hint_label.setText("通过固定、分段或手动采样匹配放电过程的物理分区。")
         elif is_voltage:
             self.phase_hint_label.setText("电压工步可使用范围输入或手动列表，应对不可整除和非均匀取点。")
+        elif is_dod:
+            self.phase_hint_label.setText("DOD 工步按容量基准换算恒流时间，适合准原位阻抗演化。")
         else:
             self.phase_hint_label.setText("静置工步表示真正独立的静置阶段。")
         self._refresh_badges()
@@ -915,6 +621,13 @@ class WorkstepEditorRow(QFrame):
         self.voltage_end_edit.setText(state.voltage_end_v)
         self.voltage_step_edit.setText(state.voltage_step_v)
         self._manual_voltage_points_text = state.voltage_manual_points_text
+        set_combo(self.eis_init_strategy_combo, state.eis_init_strategy.value)
+        self.post_trigger_rest_edit.setText(state.post_trigger_rest_s)
+        self.manual_init_e_edit.setText(state.manual_init_e_v)
+        self.estimated_loaded_start_edit.setText(state.estimated_loaded_start_v)
+        self._manual_dod_points_text = state.dod_points_text
+        set_combo(self.dod_capacity_basis_combo, state.dod_capacity_basis.value)
+        self.dod_reference_capacity_edit.setText(state.dod_reference_capacity_mah)
         self.rest_duration_edit.setText(state.rest_duration_s)
         self._sync_visibility()
 
@@ -946,6 +659,13 @@ class WorkstepEditorRow(QFrame):
                 "voltage_end_v": self.voltage_end_edit.text(),
                 "voltage_step_v": self.voltage_step_edit.text(),
                 "voltage_manual_points_text": self._manual_voltage_points_text,
+                "eis_init_strategy": self.eis_init_strategy_combo.currentData(),
+                "post_trigger_rest_s": self.post_trigger_rest_edit.text(),
+                "manual_init_e_v": self.manual_init_e_edit.text(),
+                "estimated_loaded_start_v": self.estimated_loaded_start_edit.text(),
+                "dod_points_text": self._manual_dod_points_text,
+                "dod_capacity_basis": self.dod_capacity_basis_combo.currentData(),
+                "dod_reference_capacity_mah": self.dod_reference_capacity_edit.text(),
                 "rest_duration_s": self.rest_duration_edit.text(),
             }
         )
@@ -955,7 +675,7 @@ class WorkstepEditorRow(QFrame):
         if phase_kind is PhaseUiKind.REST:
             return f"静置工步 {self.index}"
         direction_text = "放电" if self.direction_combo.currentData() == ProcessDirection.DISCHARGE.value else "充电"
-        phase_text = "时间工步" if phase_kind is PhaseUiKind.TIME_POINTS else "电压工步"
+        phase_text = "时间工步" if phase_kind is PhaseUiKind.TIME_POINTS else ("DOD工步" if phase_kind is PhaseUiKind.DOD_POINTS else "电压工步")
         return f"{direction_text}{phase_text} {self.index}"
 
 
@@ -1116,77 +836,6 @@ class LoopBlockWidget(QFrame):
         )
 
 
-class IssueListWidget(ListWidget):
-    _code_map = {
-        "dense_eis_low_frequency": "低频端设置为 0.01 Hz，判定为高风险密集取点。",
-        "long_single_eis_duration": "当前单次 EIS 持续时间较长。",
-        "interrupted_progress": "EIS 插入过于频繁，会明显打断恒流轨迹。",
-        "high_compensation_total": "中断补偿累计时间较大，会拉长后续恒流历时。",
-        "frequent_direction_switches": "工步切换充放电方向较频繁，请确认流程设计。",
-        "rest_dominates_sequence": "静置总时长超过电化学工作时长，请确认是否符合预期。",
-        "soc_depletion_risk": "SoC 仿真显示在全部 EIS 完成前可能已经耗尽。",
-        "ctc_enabled": "已启用等效容量补偿。",
-        "missing_phases": "至少需要一个工步。",
-        "phase_invalid": "工步参数无效。",
-        "missing_pulse": "脉冲模式缺少脉冲参数。",
-        "ui.refresh": "界面预览刷新失败。",
-    }
-
-    _hint_map = {
-        "dense_eis_low_frequency": "风险预估按长时低频 EIS 处理。",
-        "long_single_eis_duration": "当前估算的单次扫描时间较长。",
-        "interrupted_progress": "建议降低取点密度，或只在关键点插入 EIS。",
-        "high_compensation_total": "建议检查中断补偿模式是否过密。",
-        "soc_depletion_risk": "采样看板中的红点表示预测会丢失的点位。",
-        "ctc_enabled": "适用于需要锁定总等效放电量的测试。",
-    }
-
-    _risk_map = {
-        RiskLevel.BLOCKING: "阻断",
-        RiskLevel.HIGH: "强警告",
-        RiskLevel.MEDIUM: "警告",
-        RiskLevel.LOW: "提示",
-        None: "",
-    }
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setWordWrap(True)
-
-    def _format_issue(self, issue: ValidationIssue) -> str:
-        severity_map = {Severity.ERROR: "错误", Severity.WARNING: "警告", Severity.INFO: "提示"}
-        field_map = {"impedance_defaults.low_frequency_hz": "阻抗低频", "phases": "工步", "pulse": "脉冲参数"}
-        message = self._code_map.get(issue.code, issue.message)
-        if issue.code == "phase_invalid" and issue.message:
-            message = issue.message
-        hint = self._hint_map.get(issue.code, issue.hint)
-        field = field_map.get(issue.field or "", issue.field or "-")
-        headline = f"[{severity_map[issue.severity]}] {field}: {message}"
-        risk_prefix = self._risk_map.get(issue.risk_level, "")
-        if risk_prefix:
-            headline = f"[{risk_prefix}] {headline}"
-        if hint:
-            headline += f"\n提示：{hint}"
-        return headline
-
-    def set_issues(self, issues: list[ValidationIssue]) -> None:
-        self.clear()
-        if not issues:
-            self.addItem(QListWidgetItem("当前没有警告或错误。"))
-            return
-        for issue in issues:
-            item = QListWidgetItem(self._format_issue(issue))
-            if issue.severity is Severity.ERROR:
-                item.setForeground(Qt.GlobalColor.red)
-            elif issue.risk_level is RiskLevel.HIGH:
-                item.setForeground(Qt.GlobalColor.darkYellow)
-            elif issue.severity is Severity.WARNING:
-                item.setForeground(Qt.GlobalColor.darkYellow)
-            else:
-                item.setForeground(Qt.GlobalColor.darkCyan)
-            self.addItem(item)
-
-
 class GuidedManualPointDialog(QDialog):
     def __init__(
         self,
@@ -1286,14 +935,12 @@ WorkstepRow = WorkstepEditorRow
 
 __all__ = [
     "Card",
-    "IssueListWidget",
     "LoopBlockWidget",
     "LoopCountDialog",
     "NoWheelComboBox",
     "PresetComboBox",
     "PhaseEditor",
     "ScriptEditor",
-    "ScriptOutputPanel",
     "WorkstepRow",
     "WorkstepEditorRow",
     "fixed_font_family",

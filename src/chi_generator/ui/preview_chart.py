@@ -86,6 +86,8 @@ class ScriptPreviewChart(QWidget):
         current_floor = 0.0
         current_ceil = 0.0
         for plan in bundle.phase_plans:
+            if plan.start_time_s is None or plan.end_time_s is None:
+                continue
             start_min = plan.start_time_s / 60.0
             end_min = plan.end_time_s / 60.0
             if plan.phase_kind is PhaseKind.REST:
@@ -106,7 +108,8 @@ class ScriptPreviewChart(QWidget):
         for soc_point in bundle.soc_trace:
             self.soc_series.append(soc_point.time_s / 60.0, soc_point.soc_percent)
 
-        max_time = max(bundle.total_wall_clock_s / 60.0, 1.0)
+        chart_duration_s = bundle.total_wall_clock_s if bundle.total_wall_clock_s is not None else bundle.known_wall_clock_s
+        max_time = max(chart_duration_s / 60.0, 1.0)
         span = max(abs(current_floor), abs(current_ceil), 1e-6)
         self.axis_x.setRange(0.0, max_time * 1.03)
         self.axis_left.setRange(-span * 1.2, span * 1.2)

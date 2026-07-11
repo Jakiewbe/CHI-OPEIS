@@ -67,8 +67,6 @@ class TimeBasisMode(StrEnum):
 
 class SpacingMode(StrEnum):
     LINEAR = "linear"
-    LOG = "log"
-    SQRT = "sqrt"
     MANUAL = "manual"
 
 
@@ -81,6 +79,18 @@ class ImpedanceMeasurementMode(StrEnum):
     SF = "sf"
 
 
+class EisInitStrategy(StrEnum):
+    OPEN_CIRCUIT = "open_circuit"
+    TARGET_VOLTAGE = "target_voltage"
+    MANUAL = "manual"
+
+
+class DodCapacityBasis(StrEnum):
+    THEORETICAL = "theoretical"
+    USER_REFERENCE = "user_reference"
+    CONTROL_CELL = "control_cell"
+
+
 class PlanningStrategy(StrEnum):
     LEGACY_DEFAULT = "legacy_default"
     INTERRUPTION_AWARE = "interruption_aware"
@@ -89,6 +99,7 @@ class PlanningStrategy(StrEnum):
 class PhaseKind(StrEnum):
     TIME_POINTS = "time_points"
     VOLTAGE_POINTS = "voltage_points"
+    DOD_POINTS = "dod_points"
     REST = "rest"
 
 
@@ -320,6 +331,41 @@ class TimePointPhase(ControlledPhaseBase):
 class VoltagePointPhase(ControlledPhaseBase):
     phase_kind: Literal[PhaseKind.VOLTAGE_POINTS] = PhaseKind.VOLTAGE_POINTS
     voltage_points: VoltagePointConfig
+    eis_init_strategy: EisInitStrategy = EisInitStrategy.TARGET_VOLTAGE
+    post_trigger_rest_s: NonNegativeFloat = 0.0
+    manual_init_e_v: PotentialFloat | None = None
+    estimated_loaded_start_v: PotentialFloat | None = None
+
+    @model_validator(mode="after")
+    def _validate_eis_strategy(self) -> "VoltagePointPhase":
+        if self.eis_init_strategy is EisInitStrategy.MANUAL and self.manual_init_e_v is None:
+            raise ValueError("manual_init_e_v is required when eis_init_strategy is manual")
+        return self
+
+
+class DodPointConfig(DomainModel):
+    dod_points_percent: list[PositiveFloat] = Field(default_factory=lambda: [20.0, 40.0, 60.0, 80.0, 100.0])
+    capacity_basis: DodCapacityBasis = DodCapacityBasis.THEORETICAL
+    reference_capacity_mah: PositiveFloat | None = None
+
+    @model_validator(mode="after")
+    def _validate_dod_points(self) -> "DodPointConfig":
+        if not self.dod_points_percent:
+            raise ValueError("dod mode requires at least one DOD point")
+        if any(value > 100 for value in self.dod_points_percent):
+            raise ValueError("DOD points must be <= 100%")
+        if any(current <= previous for previous, current in zip(self.dod_points_percent, self.dod_points_percent[1:])):
+            raise ValueError("DOD points must be strictly increasing")
+        if self.capacity_basis is not DodCapacityBasis.THEORETICAL and self.reference_capacity_mah is None:
+            raise ValueError("reference_capacity_mah is required for reference DOD capacity basis")
+        return self
+
+
+class DodPointPhase(ControlledPhaseBase):
+    phase_kind: Literal[PhaseKind.DOD_POINTS] = PhaseKind.DOD_POINTS
+    dod_points: DodPointConfig = Field(default_factory=DodPointConfig)
+    eis_init_strategy: Literal[EisInitStrategy.OPEN_CIRCUIT] = EisInitStrategy.OPEN_CIRCUIT
+    post_trigger_rest_s: NonNegativeFloat = 300.0
 
 
 class RestPhase(PhaseBase):
@@ -327,7 +373,7 @@ class RestPhase(PhaseBase):
     duration_s: PositiveFloat
 
 
-ExperimentPhase = TimePointPhase | VoltagePointPhase | RestPhase
+ExperimentPhase = TimePointPhase | VoltagePointPhase | DodPointPhase | RestPhase
 
 
 class ExperimentSequenceRequest(DomainModel):
@@ -446,7 +492,7 @@ class PhaseRenderPlan(DomainModel):
     label: str
     phase_kind: PhaseKind
     direction: ProcessDirection | None = None
-    sampling_mode: SamplingMode | SpacingMode | None = None
+    sampling_mode: SamplingMode | SpacingMode | DodCapacityBasis | None = None
     effective_points: list[float] = Field(default_factory=list)
     rendered_points: list[float] = Field(default_factory=list)
     deltas_s: list[float] = Field(default_factory=list)
@@ -455,9 +501,11 @@ class PhaseRenderPlan(DomainModel):
     lost_eis_marker_times_s: list[float] = Field(default_factory=list)
     point_count: int = 0
     eis_count: int = 0
-    wall_clock_total_s: float = 0.0
-    start_time_s: float = 0.0
-    end_time_s: float = 0.0
+    wall_clock_total_s: float | None = 0.0
+    known_wall_clock_s: float = 0.0
+    start_time_s: float | None = None
+    end_time_s: float | None = None
+    timing_complete: bool = True
     operating_current_a: float | None = None
     eis_duration_s: float = 0.0
     insert_eis_after_each_point: bool = False
@@ -477,11 +525,20 @@ class ScriptBundle(DomainModel):
     def can_generate(self) -> bool:
         return not any(issue.severity is Severity.ERROR for issue in self.issues)
 
+    @property
+    def requires_confirmation(self) -> bool:
+        return any(
+            issue.severity is Severity.WARNING and issue.risk_level is RiskLevel.HIGH
+            for issue in self.issues
+        )
+
 
 class SequenceScriptBundle(ScriptBundle):
     kind: ScriptKind = ScriptKind.SEQUENCE
     phase_plans: list[PhaseRenderPlan] = Field(default_factory=list)
-    total_wall_clock_s: float = 0.0
+    total_wall_clock_s: float | None = 0.0
+    known_wall_clock_s: float = 0.0
+    soc_prediction_complete: bool = True
     total_point_count: int = 0
     total_eis_count: int = 0
     soc_trace: list[SocTracePoint] = Field(default_factory=list)
@@ -496,7 +553,11 @@ __all__ = [
     "CurrentInputMode",
     "CurrentResolution",
     "CurrentSetpointConfig",
+    "DodCapacityBasis",
+    "DodPointConfig",
+    "DodPointPhase",
     "DomainModel",
+    "EisInitStrategy",
     "ExperimentPhase",
     "ExperimentRequest",
     "ExperimentSequenceRequest",

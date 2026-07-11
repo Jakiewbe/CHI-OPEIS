@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 
+from .errors import GuiFieldError
+
 
 _NUMBER_PATTERN = re.compile(r"[-+]?(?:\d*\.\d+|\d+)(?:[eE][-+]?\d+)?")
 
@@ -11,21 +13,36 @@ _NUMBER_PATTERN = re.compile(r"[-+]?(?:\d*\.\d+|\d+)(?:[eE][-+]?\d+)?")
 def parse_float(raw: str, *, field_label: str) -> float:
     text = str(raw).strip()
     if not text:
-        raise ValueError(f"{field_label} 不能为空。")
+        raise GuiFieldError(field_label, f"{field_label} 不能为空。")
     try:
         return float(text)
     except ValueError as exc:
-        raise ValueError(f"{field_label} 不是合法数字。") from exc
+        raise GuiFieldError(field_label, f"{field_label} 不是合法数字。") from exc
 
 
 def parse_int(raw: str, *, field_label: str) -> int:
     text = str(raw).strip()
     if not text:
-        raise ValueError(f"{field_label} 不能为空。")
+        raise GuiFieldError(field_label, f"{field_label} 不能为空。")
     try:
         return int(text)
     except ValueError as exc:
-        raise ValueError(f"{field_label} 不是合法整数。") from exc
+        raise GuiFieldError(field_label, f"{field_label} 不是合法整数。") from exc
+
+
+def parse_float_list_strict(raw_text: str, *, field_label: str) -> list[float]:
+    text = raw_text.strip()
+    if not text:
+        return []
+    values: list[float] = []
+    for token in re.split(r"[\s,;]+", text):
+        if not token:
+            continue
+        try:
+            values.append(float(token))
+        except ValueError as exc:
+            raise GuiFieldError(field_label, f"{field_label} 包含无法解析的数值：{token}") from exc
+    return values
 
 
 def parse_number_list(raw_text: str) -> list[float]:
@@ -67,6 +84,7 @@ __all__ = [
     "parse_activation_rows",
     "parse_current_token",
     "parse_float",
+    "parse_float_list_strict",
     "parse_int",
     "parse_number_list",
     "parse_segment_rows",

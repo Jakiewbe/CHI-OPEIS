@@ -37,15 +37,17 @@ UI 不负责：
 - Warning / Error 校验
 - CHI Macro Command 纯文本渲染
 
-### 兼容层
+### 启动兼容层
 
 位置：`src/opeis_master/`
 
 职责：
 
-- 保留旧入口路径
-- 转发到新的 GUI 实现
-- 保留旧 domain 契约测试使用的模块
+- 保留 `opeis-master` 命令和旧 GUI 启动路径
+- 直接转发到 `chi_generator` 的应用入口和主窗口
+- 不保留第二套模型、计算、校验或渲染实现
+
+`opeis_master` 仅承诺启动入口兼容，不再提供旧 Python 领域 API。所有新功能和修复只能进入 `chi_generator`。
 
 ## 设计约束
 

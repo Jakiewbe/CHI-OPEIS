@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import pytest
+
 from PySide6.QtWidgets import QScrollArea, QSplitter
 
 from chi_generator.app import build_application
 from chi_generator.domain.models import SamplingMode
 from chi_generator.ui.models import PhaseUiKind
 from chi_generator.ui.widgets import PresetComboBox
+
+pytestmark = pytest.mark.gui
 
 
 def _input_layout(window):

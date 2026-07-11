@@ -69,7 +69,7 @@ def test_rendered_script_uses_blank_lines_to_separate_sections() -> None:
 def test_rendered_names_include_stage_tokens_for_sequence_steps() -> None:
     bundle = ScriptGenerationService().generate(_request())
 
-    assert "save=CFXA_S01_CC_2.70V" in bundle.minimal_script
-    assert "save=CFXA_S01_EIS_2.70V" in bundle.minimal_script
-    assert "save=CFXA_S01_CC_2.50V" in bundle.minimal_script
-    assert "save=CFXA_S01_EIS_2.50V" in bundle.minimal_script
+    assert "save=CFXA_S01_CC_2p70V" in bundle.minimal_script
+    assert "save=CFXA_S01_EIS_2p70V" in bundle.minimal_script
+    assert "save=CFXA_S01_CC_2p50V" in bundle.minimal_script
+    assert "save=CFXA_S01_EIS_2p50V" in bundle.minimal_script
