@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="400" viewBox="0 0 1200 400" role="img" aria-labelledby="title desc">
+  <title id="title">OPEIS Master — 把实验方案变成 CHI 脚本</title>
+  <desc id="desc">深色品牌横幅。左侧介绍面向辰华电化学工作站的原位阻抗宏命令生成工具；右侧以恒流与 EIS 交替的示意图表达取点流程。底部列出序列与脉冲、取点规划、纯命令输出三项功能。</desc>
+  <defs>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 H 0 V 40" fill="none" stroke="#1d333c" stroke-width="1"/>
+    </pattern>
+  </defs>
+  <rect width="1200" height="400" rx="16" fill="#101c24"/>
+  <rect x="704" y="24" width="472" height="282" fill="url(#grid)" opacity="0.5"/>
+  <rect x="56" y="42" width="4" height="28" rx="2" fill="#63dcc5"/>
+  <g font-family="Segoe UI, Microsoft YaHei, sans-serif">
+    <text x="76" y="67" font-size="28" font-weight="600" fill="#edf5f6">OPEIS Master</text>
+    <text x="56" y="139" font-size="46" font-weight="700" fill="#edf5f6">把实验方案</text>
+    <text x="56" y="198" font-size="46" font-weight="700" fill="#63dcc5">变成 CHI 脚本</text>
+    <text x="56" y="248" font-size="23" fill="#edf5f6">原位阻抗，按你的工步展开。</text>
+    <text x="56" y="283" font-size="19" fill="#adbec5">为辰华电化学工作站规划并生成 EIS 宏命令。</text>
+
+    <rect x="740" y="72" width="404" height="218" rx="14" fill="#14252d" stroke="#2b464e"/>
+    <text x="766" y="106" font-size="16" letter-spacing="2" fill="#adbec5">EXPERIMENT → MACRO</text>
+    <path d="M 768 195 H 784 V 158 H 858 V 195 H 913 V 158 H 987 V 195 H 1042 V 158 H 1115" fill="none" stroke="#63dcc5" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M 882 134 V 220 M 1011 134 V 220" fill="none" stroke="#526c73" stroke-width="1" stroke-dasharray="4 6"/>
+    <circle cx="882" cy="195" r="8" fill="#63dcc5"/>
+    <circle cx="1011" cy="195" r="8" fill="#63dcc5"/>
+    <text x="802" y="247" font-size="19" fill="#edf5f6">恒流</text>
+    <text x="867" y="247" font-size="19" fill="#63dcc5">EIS</text>
+    <text x="931" y="247" font-size="19" fill="#edf5f6">恒流</text>
+    <text x="996" y="247" font-size="19" fill="#63dcc5">EIS</text>
+    <text x="1060" y="247" font-size="19" fill="#edf5f6">继续</text>
+
+    <path d="M 56 322 H 1144" stroke="#2b414a" stroke-width="1"/>
+    <circle cx="62" cy="358" r="4" fill="#63dcc5"/>
+    <text x="78" y="365" font-size="20" fill="#d7e4e8">序列与脉冲</text>
+    <circle cx="316" cy="358" r="4" fill="#63dcc5"/>
+    <text x="332" y="365" font-size="20" fill="#d7e4e8">取点规划</text>
+    <circle cx="550" cy="358" r="4" fill="#63dcc5"/>
+    <text x="566" y="365" font-size="20" fill="#d7e4e8">纯命令输出</text>
+    <text x="1144" y="365" text-anchor="end" font-size="17" fill="#adbec5">CHI IN-SITU EIS</text>
+  </g>
+</svg>
